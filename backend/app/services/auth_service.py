@@ -1,5 +1,6 @@
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, hash_password, verify_password
@@ -42,7 +43,14 @@ def register_user(db: Session, payload: UserRegisterRequest) -> User:
         is_active=True,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists.",
+        )
     db.refresh(user)
     return user
 
@@ -50,17 +58,15 @@ def register_user(db: Session, payload: UserRegisterRequest) -> User:
 def authenticate_user(db: Session, payload: UserLoginRequest) -> str:
     """Authenticate user credentials and return a signed JWT access token."""
     user = get_user_by_email(db, payload.email)
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(payload.password, user.hashed_password)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
             headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive.",
         )
 
     return create_access_token(subject=user.id)
