@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Video,
@@ -9,8 +9,10 @@ import {
   Settings,
   X,
   Sparkles,
+  LogOut,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 
 const navItems = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard },
@@ -23,7 +25,15 @@ const navItems = [
 ];
 
 export function Sidebar() {
+  const navigate = useNavigate();
   const { isSidebarOpen, setSidebarOpen } = useAppStore();
+  const { user, logout } = useAuthStore();
+
+  const handleLogout = () => {
+    setSidebarOpen(false);
+    logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <>
@@ -88,9 +98,30 @@ export function Sidebar() {
           })}
         </nav>
 
-        <div className="border-t border-slate-800 p-4">
-          <div className="rounded-lg bg-slate-800/60 px-3 py-2.5">
-            <p className="text-xs font-medium text-slate-200">Local-First Workspace</p>
+        <div className="border-t border-slate-800 p-4 space-y-3">
+          {user && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-slate-800/60 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium text-slate-100">
+                  {user.full_name}
+                </p>
+                <p className="truncate text-[11px] text-slate-400">
+                  {user.email}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Sign out"
+                aria-label="Sign out"
+                className="shrink-0 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-700 hover:text-white"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          <div className="rounded-lg bg-slate-800/40 px-3 py-2">
+            <p className="text-xs font-medium text-slate-300">Local-First Workspace</p>
             <p className="mt-0.5 text-[11px] text-slate-400">v0.1.0 • Foundation</p>
           </div>
         </div>

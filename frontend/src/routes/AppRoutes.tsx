@@ -9,12 +9,22 @@ import {
 } from 'lucide-react';
 import { MainLayout } from '../components/layout/MainLayout';
 import { PlaceholderPage } from '../components/common/PlaceholderPage';
+import { ProtectedRoute } from '../components/auth/ProtectedRoute';
+import { PublicOnlyRoute } from '../components/auth/PublicOnlyRoute';
+import { LoginPage } from '../pages/auth/LoginPage';
+import { RegisterPage } from '../pages/auth/RegisterPage';
 import { DashboardPage } from '../pages/dashboard/DashboardPage';
 
 export function AppRoutes() {
   return (
     <Routes>
-      <Route element={<MainLayout />}>
+      <Route element={<PublicOnlyRoute />}>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+      </Route>
+
+      <Route element={<ProtectedRoute />}>
+        <Route element={<MainLayout />}>
         <Route path="/" element={<DashboardPage />} />
         <Route
           path="/meetings"
@@ -76,6 +86,7 @@ export function AppRoutes() {
             />
           }
         />
+        </Route>
       </Route>
     </Routes>
   );
