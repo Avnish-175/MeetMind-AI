@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.routes.auth import router as auth_router
 from app.core.config import settings
 from app.database.dependencies import get_db
 
@@ -14,6 +15,8 @@ app = FastAPI(
     description="Local-first Agentic Multimodal Meeting Intelligence and Productivity Assistant",
     version=settings.APP_VERSION,
 )
+
+app.include_router(auth_router)
 
 
 @app.get("/", tags=["Status"])
