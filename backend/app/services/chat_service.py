@@ -14,7 +14,9 @@ from app.ai.llm_service import (
 from app.ai.prompts import DEFAULT_CHAT_SYSTEM_PROMPT
 from app.models.chat_message import ChatMessage
 from app.models.conversation import Conversation
+from app.models.meeting import Meeting
 from app.schemas.chat import ConversationCreate
+from app.services.rag_service import answer_meeting_question
 
 logger = logging.getLogger(__name__)
 
@@ -138,18 +140,39 @@ async def send_user_message_and_generate_response(
     conversation_id: int,
     user_id: int,
     content: str,
+    mode: str = "general",
+    meeting_id: int | None = None,
 ) -> ChatMessage:
-    """Persist the user message, query Ollama for an assistant response, and persist the assistant response.
+    """Persist the user message, generate a general or meeting-RAG response, and persist it.
 
     If model generation fails, the user message remains safely persisted in the database.
     """
-    # 1. Validate ownership
+    if mode not in ("general", "meeting"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid chat mode. Must be 'general' or 'meeting'.",
+        )
+
+    # 1. Validate conversation ownership
     conversation = get_user_conversation(db, conversation_id, user_id)
     if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found.",
         )
+
+    resolved_meeting_id = meeting_id if mode == "meeting" else None
+    if mode == "meeting" and resolved_meeting_id is not None:
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.id == resolved_meeting_id, Meeting.user_id == user_id)
+            .first()
+        )
+        if meeting is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Selected meeting not found.",
+            )
 
     clean_content = content.strip()
     if not clean_content:
@@ -163,6 +186,8 @@ async def send_user_message_and_generate_response(
         conversation_id=conversation.id,
         role="user",
         content=clean_content,
+        mode=mode,
+        meeting_id=resolved_meeting_id,
     )
 
     # Auto-title conversation if it still has the default title
@@ -177,9 +202,14 @@ async def send_user_message_and_generate_response(
     db.add(user_message)
     db.commit()
     db.refresh(user_message)
-    logger.info("Persisted user message %d in conversation %d", user_message.id, conversation.id)
+    logger.info(
+        "Persisted user message %d in conversation %d (mode=%s)",
+        user_message.id,
+        conversation.id,
+        mode,
+    )
 
-    # 3. Retrieve conversation message history for Ollama context
+    # 3. Retrieve conversation message history
     history_records = (
         db.query(ChatMessage)
         .filter(ChatMessage.conversation_id == conversation.id)
@@ -190,38 +220,54 @@ async def send_user_message_and_generate_response(
         {"role": rec.role, "content": rec.content} for rec in history_records
     ]
 
-    # 4 & 5. Call Ollama service to generate assistant response
-    try:
-        assistant_content = await generate_chat_response(
-            messages=context_messages,
-            system_prompt=DEFAULT_CHAT_SYSTEM_PROMPT,
+    # 4 & 5. Generate assistant response according to mode
+    citations_data: list[dict[str, Any]] | None = None
+    if mode == "meeting":
+        rag_result = await answer_meeting_question(
+            db=db,
+            user_id=user_id,
+            question=clean_content,
+            meeting_id=resolved_meeting_id,
+            conversation_history=context_messages,
         )
-    except (OllamaConnectionError, OllamaModelNotFoundError, LLMServiceError, Exception) as exc:
-        logger.error(
-            "Local AI chat generation failed for conversation %d: %s",
-            conversation.id,
-            exc,
-        )
-        # The user message was already committed in step 2 and is not lost.
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Local AI model generation failed: {exc}. Your message was saved.",
-        )
+        assistant_content = rag_result["answer"]
+        citations_data = rag_result.get("citations") or None
+    else:
+        try:
+            assistant_content = await generate_chat_response(
+                messages=context_messages,
+                system_prompt=DEFAULT_CHAT_SYSTEM_PROMPT,
+            )
+        except (OllamaConnectionError, OllamaModelNotFoundError, LLMServiceError, Exception) as exc:
+            logger.error(
+                "Local AI chat generation failed for conversation %d: %s",
+                conversation.id,
+                exc,
+            )
+            # The user message was already committed in step 2 and is not lost.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Local AI model generation failed: {exc}. Your message was saved.",
+            )
 
     # 6. Persist the assistant response
     assistant_message = ChatMessage(
         conversation_id=conversation.id,
         role="assistant",
         content=assistant_content,
+        mode=mode,
+        meeting_id=resolved_meeting_id,
+        citations=citations_data,
     )
     conversation.updated_at = func.now()
     db.add(assistant_message)
     db.commit()
     db.refresh(assistant_message)
     logger.info(
-        "Persisted assistant response %d in conversation %d",
+        "Persisted assistant response %d in conversation %d (mode=%s)",
         assistant_message.id,
         conversation.id,
+        mode,
     )
 
     # 7. Return saved assistant message

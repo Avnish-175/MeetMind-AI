@@ -10,6 +10,8 @@ from app.models.meeting import Meeting
 from app.models.transcript import MeetingTranscript
 from app.models.user import User
 from app.schemas.meeting import (
+    IndexingStartResponse,
+    IndexingStatusResponse,
     MeetingListResponse,
     MeetingResponse,
     TranscriptionStartResponse,
@@ -19,6 +21,11 @@ from app.schemas.transcript import MeetingTranscriptResponse
 from app.services.analysis_orchestrator import (
     process_meeting_analysis_task,
     start_meeting_analysis_job,
+)
+from app.services.indexing_service import (
+    get_meeting_indexing_status,
+    process_meeting_indexing_task,
+    start_meeting_indexing_job,
 )
 from app.services.meeting_analysis_service import get_meeting_analysis
 from app.services.meeting_service import (
@@ -187,6 +194,54 @@ def get_meeting_analysis_endpoint(
 ) -> Any:
     """Retrieve structured meeting analysis, summaries, action items, and insights."""
     return get_meeting_analysis(
+        db=db,
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+    )
+
+
+@router.post(
+    "/{meeting_id}/index",
+    response_model=IndexingStartResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def index_meeting_embeddings(
+    meeting_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> IndexingStartResponse:
+    """Start background transcript chunking and pgvector embedding indexing for a meeting."""
+    meeting = start_meeting_indexing_job(
+        db=db,
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+    )
+    background_tasks.add_task(process_meeting_indexing_task, meeting.id)
+    logger.info(
+        "Enqueued background indexing task for meeting ID=%d (requested by user ID=%d)",
+        meeting.id,
+        current_user.id,
+    )
+    return IndexingStartResponse(
+        meeting_id=meeting.id,
+        embedding_status=meeting.embedding_status,
+        message="Meeting embedding indexing started.",
+    )
+
+
+@router.get(
+    "/{meeting_id}/index",
+    response_model=IndexingStatusResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_meeting_index_status(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Retrieve the current embedding indexing status and chunk count for a meeting."""
+    return get_meeting_indexing_status(
         db=db,
         meeting_id=meeting_id,
         user_id=current_user.id,

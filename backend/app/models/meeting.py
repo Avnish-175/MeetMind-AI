@@ -37,6 +37,17 @@ class Meeting(Base):
         nullable=False,
     )
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_status: Mapped[str] = mapped_column(
+        String(32),
+        default="not_indexed",
+        server_default="not_indexed",
+        nullable=False,
+    )
+    embedding_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    indexed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

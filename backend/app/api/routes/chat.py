@@ -139,5 +139,7 @@ async def send_message(
         conversation_id=conversation_id,
         user_id=current_user.id,
         content=payload.content,
+        mode=payload.mode,
+        meeting_id=payload.meeting_id,
     )
     return ChatMessageResponse.model_validate(assistant_message)

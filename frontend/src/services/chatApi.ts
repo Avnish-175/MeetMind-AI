@@ -2,6 +2,7 @@ import axios from 'axios';
 import api from './api';
 import type {
   ChatMessage,
+  ChatMode,
   Conversation,
   ConversationDetail,
   ConversationListResponse,
@@ -40,11 +41,17 @@ export async function deleteConversation(id: number): Promise<void> {
 
 export async function sendChatMessage(
   conversationId: number,
-  content: string
+  content: string,
+  mode: ChatMode = 'general',
+  meetingId: number | null = null
 ): Promise<ChatMessage> {
   const response = await api.post<ChatMessage>(
     `/api/v1/chat/conversations/${conversationId}/messages`,
-    { content }
+    {
+      content,
+      mode,
+      meeting_id: mode === 'meeting' ? meetingId : null,
+    }
   );
   return response.data;
 }

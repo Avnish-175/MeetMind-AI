@@ -3,8 +3,10 @@ export type {
   AnalysisStatus,
   DeadlineItem,
   DecisionItem,
+  EmbeddingStatus,
   ExtractedEntity,
   ExtractedKeyword,
+  IndexingStartResponse,
   KeyPointItem,
   LinguisticMetadata,
   Meeting,
@@ -22,6 +24,8 @@ export type {
 
 export type {
   ChatMessage,
+  ChatMode,
+  CitationItem,
   Conversation,
   ConversationDetail,
   ConversationListResponse,

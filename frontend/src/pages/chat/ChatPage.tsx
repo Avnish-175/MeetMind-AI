@@ -1,11 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
   Bot,
   Check,
+  Clock,
   Cpu,
+  Database,
   Edit2,
+  ExternalLink,
+  FileText,
+  Loader2,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -13,15 +19,25 @@ import {
   Sparkles,
   Trash2,
   User,
+  Video,
   X,
 } from 'lucide-react';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useChatStore } from '../../store/useChatStore';
+import { useMeetingStore } from '../../store/useMeetingStore';
+import type { ChatMode, CitationItem } from '../../types/chat';
+import { formatTimestamp } from '../../utils/meetingFormat';
 
-const PROMPT_SUGGESTIONS = [
+const GENERAL_PROMPT_SUGGESTIONS = [
   'Help me structure an effective weekly project sync agenda.',
   'What are the key trade-offs of local AI vs cloud-hosted LLMs?',
   'Draft an email follow-up summarizing meeting decisions and next steps.',
+];
+
+const MEETING_PROMPT_SUGGESTIONS = [
+  'What key decisions were made in my recent meetings?',
+  'List all action items and deadlines discussed in the meeting.',
+  'What open questions or blockers were left unresolved?',
 ];
 
 function formatTime(isoString: string): string {
@@ -38,6 +54,16 @@ function formatTime(isoString: string): string {
   }
 }
 
+function formatCitationRange(citation: CitationItem): string {
+  if (citation.start_time !== null && citation.end_time !== null) {
+    return `${formatTimestamp(citation.start_time)} – ${formatTimestamp(citation.end_time)}`;
+  }
+  if (citation.start_time !== null) {
+    return formatTimestamp(citation.start_time);
+  }
+  return 'Transcript excerpt';
+}
+
 export function ChatPage() {
   useDocumentTitle('AI Assistant');
 
@@ -45,6 +71,8 @@ export function ChatPage() {
     conversations,
     activeConversationId,
     currentConversation,
+    chatMode,
+    selectedMeetingId,
     isLoadingConversations,
     isLoadingMessages,
     isSendingMessage,
@@ -54,11 +82,21 @@ export function ChatPage() {
     loadConversations,
     selectConversation,
     startNewConversation,
+    setChatMode,
+    setSelectedMeetingId,
     sendMessage,
     updateTitle,
     removeConversation,
     clearError,
   } = useChatStore();
+
+  const {
+    meetings,
+    isStartingIndexing,
+    indexingError,
+    loadMeetings,
+    triggerIndexing,
+  } = useMeetingStore();
 
   const [inputMessage, setInputMessage] = useState('');
   const [editingTitleId, setEditingTitleId] = useState<number | null>(null);
@@ -69,15 +107,37 @@ export function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load conversations on mount
   useEffect(() => {
     void loadConversations();
-  }, [loadConversations]);
+    void loadMeetings();
+  }, [loadConversations, loadMeetings]);
 
-  // Scroll to bottom when messages change or loading state changes
+  // Poll meetings list if any meeting is currently indexing
+  useEffect(() => {
+    const hasIndexing = meetings.some(
+      (m) => m.embedding_status === 'pending' || m.embedding_status === 'processing'
+    );
+    if (!hasIndexing) return;
+
+    const intervalId = window.setInterval(() => {
+      void loadMeetings();
+    }, 3000);
+    return () => window.clearInterval(intervalId);
+  }, [meetings, loadMeetings]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentConversation?.messages, isSendingMessage]);
+
+  const selectedMeeting = useMemo(
+    () => meetings.find((m) => m.id === selectedMeetingId) ?? null,
+    [meetings, selectedMeetingId]
+  );
+
+  const indexedMeetingsCount = useMemo(
+    () => meetings.filter((m) => m.embedding_status === 'completed').length,
+    [meetings]
+  );
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -137,6 +197,13 @@ export function ChatPage() {
     textareaRef.current?.focus();
   };
 
+  const handleModeChange = (mode: ChatMode) => {
+    setChatMode(mode);
+  };
+
+  const promptSuggestions =
+    chatMode === 'meeting' ? MEETING_PROMPT_SUGGESTIONS : GENERAL_PROMPT_SUGGESTIONS;
+
   return (
     <div className="space-y-4">
       {/* Page Header */}
@@ -146,7 +213,7 @@ export function ChatPage() {
             AI Assistant
           </h1>
           <p className="text-sm text-slate-500">
-            Interactive AI chat running locally on your hardware.
+            General AI chat and meeting-aware Q&amp;A running locally on your hardware.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -159,7 +226,7 @@ export function ChatPage() {
       </div>
 
       {/* Main Chat Layout Container */}
-      <div className="relative flex h-[calc(100vh-13.5rem)] min-h-[500px] overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs">
+      <div className="relative flex h-[calc(100vh-13.5rem)] min-h-[540px] overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs">
         {/* Left Sidebar: Conversations List */}
         <aside
           className={`absolute inset-y-0 left-0 z-20 flex w-full flex-col border-r border-slate-200 bg-slate-50/80 transition-transform duration-200 ease-in-out md:static md:w-80 md:translate-x-0 ${
@@ -295,8 +362,8 @@ export function ChatPage() {
 
         {/* Right Main Chat Area */}
         <section className="flex flex-1 flex-col min-w-0 bg-white">
-          {/* Chat Area Top Bar */}
-          <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-4">
+          {/* Chat Area Top Bar + Mode Selector */}
+          <div className="flex flex-col gap-2 border-b border-slate-200 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2 min-w-0">
               <button
                 type="button"
@@ -322,7 +389,101 @@ export function ChatPage() {
                 </div>
               </div>
             </div>
+
+            {/* Mode Selector */}
+            <div className="flex items-center gap-1 self-start rounded-xl bg-slate-100 p-1 sm:self-auto">
+              <button
+                type="button"
+                onClick={() => handleModeChange('general')}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  chatMode === 'general'
+                    ? 'bg-white text-slate-900 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+                General Chat
+              </button>
+              <button
+                type="button"
+                onClick={() => handleModeChange('meeting')}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  chatMode === 'meeting'
+                    ? 'bg-white text-slate-900 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Video className="h-3.5 w-3.5 text-indigo-600" />
+                Meeting Chat
+              </button>
+            </div>
           </div>
+
+          {/* Meeting Context Bar (shown in Meeting Chat mode) */}
+          {chatMode === 'meeting' && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-100 bg-indigo-50/40 px-4 py-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-slate-700">Search scope:</span>
+                <select
+                  value={selectedMeetingId ?? ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedMeetingId(val ? Number(val) : null);
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 shadow-2xs focus:border-indigo-500 focus:outline-hidden"
+                >
+                  <option value="">
+                    All My Indexed Meetings ({indexedMeetingsCount})
+                  </option>
+                  {meetings.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.title}{' '}
+                      {m.embedding_status === 'completed'
+                        ? '(Indexed)'
+                        : m.embedding_status === 'processing' || m.embedding_status === 'pending'
+                        ? '(Indexing...)'
+                        : '(Not indexed)'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Selected Meeting Indexing Status / Action */}
+              {selectedMeeting && (
+                <div className="flex items-center gap-2">
+                  {selectedMeeting.embedding_status === 'completed' ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                      <Check className="h-3 w-3" />
+                      Indexed
+                    </span>
+                  ) : selectedMeeting.embedding_status === 'pending' ||
+                    selectedMeeting.embedding_status === 'processing' ||
+                    isStartingIndexing ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Indexing...
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void triggerIndexing(selectedMeeting.id)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-white px-2.5 py-1 text-[11px] font-medium text-indigo-700 shadow-2xs hover:bg-indigo-50"
+                    >
+                      <Database className="h-3 w-3" />
+                      Index Meeting
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {indexingError && chatMode === 'meeting' && (
+            <div className="mx-4 mt-2 flex items-center gap-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700 ring-1 ring-inset ring-rose-600/20">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              <span>{indexingError}</span>
+            </div>
+          )}
 
           {/* Messages Container */}
           <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
@@ -331,21 +492,29 @@ export function ChatPage() {
                 <RefreshCw className="h-6 w-6 animate-spin" />
               </div>
             ) : !currentConversation || currentConversation.messages.length === 0 ? (
-              /* Empty state with prompt suggestions */
               <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center text-center">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 shadow-xs ring-1 ring-indigo-500/20">
-                  <Sparkles className="h-6 w-6" />
+                  {chatMode === 'meeting' ? (
+                    <Video className="h-6 w-6" />
+                  ) : (
+                    <Sparkles className="h-6 w-6" />
+                  )}
                 </div>
                 <h3 className="mt-4 text-base font-semibold text-slate-900">
-                  How can MeetMind help you today?
+                  {chatMode === 'meeting'
+                    ? 'Ask questions about your meetings'
+                    : 'How can MeetMind help you today?'}
                 </h3>
                 <p className="mt-1 text-xs text-slate-500 max-w-md">
-                  Ask questions, draft notes, organize meeting plans, or brainstorm. All
-                  conversations remain strictly on your local device.
+                  {chatMode === 'meeting'
+                    ? selectedMeeting
+                      ? `Searching transcripts from "${selectedMeeting.title}". Answers are strictly grounded with citations.`
+                      : `Searching across ${indexedMeetingsCount} indexed meeting(s). Answers include timestamped transcript citations.`
+                    : 'Ask questions, draft notes, organize meeting plans, or brainstorm. All conversations remain strictly on your local device.'}
                 </p>
 
                 <div className="mt-6 grid w-full gap-2 text-left">
-                  {PROMPT_SUGGESTIONS.map((suggestion, idx) => (
+                  {promptSuggestions.map((suggestion, idx) => (
                     <button
                       key={idx}
                       type="button"
@@ -358,10 +527,12 @@ export function ChatPage() {
                 </div>
               </div>
             ) : (
-              /* Conversation Messages List */
               <>
                 {currentConversation.messages.map((msg, index) => {
                   const isUser = msg.role === 'user';
+                  const hasCitations =
+                    !isUser && Array.isArray(msg.citations) && msg.citations.length > 0;
+
                   return (
                     <div
                       key={msg.id || `msg-${index}`}
@@ -373,21 +544,79 @@ export function ChatPage() {
                         </div>
                       )}
 
-                      <div
-                        className={`group relative max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                          isUser
-                            ? 'bg-indigo-600 text-white rounded-br-xs shadow-xs'
-                            : 'bg-slate-100 text-slate-800 rounded-bl-xs border border-slate-200/80 shadow-2xs'
-                        }`}
-                      >
-                        <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-                        {msg.created_at && (
-                          <div
-                            className={`mt-1.5 text-[10px] ${
-                              isUser ? 'text-indigo-200 text-right' : 'text-slate-400'
-                            }`}
-                          >
-                            {formatTime(msg.created_at)}
+                      <div className={`max-w-[85%] sm:max-w-[75%] space-y-2`}>
+                        <div
+                          className={`group relative rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                            isUser
+                              ? 'bg-indigo-600 text-white rounded-br-xs shadow-xs'
+                              : 'bg-slate-100 text-slate-800 rounded-bl-xs border border-slate-200/80 shadow-2xs'
+                          }`}
+                        >
+                          {msg.mode === 'meeting' && (
+                            <div
+                              className={`mb-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                isUser
+                                  ? 'bg-indigo-500/60 text-indigo-100'
+                                  : 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-600/15'
+                              }`}
+                            >
+                              <Video className="h-2.5 w-2.5" />
+                              Meeting RAG
+                            </div>
+                          )}
+                          <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                          {msg.created_at && (
+                            <div
+                              className={`mt-1.5 text-[10px] ${
+                                isUser ? 'text-indigo-200 text-right' : 'text-slate-400'
+                              }`}
+                            >
+                              {formatTime(msg.created_at)}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Source Citations */}
+                        {hasCitations && (
+                          <div className="rounded-xl border border-slate-200/90 bg-slate-50/70 p-3 space-y-2">
+                            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                              <FileText className="h-3.5 w-3.5 text-indigo-600" />
+                              Sources ({msg.citations!.length})
+                            </div>
+                            <div className="grid gap-2">
+                              {msg.citations!.map((citation, cIdx) => {
+                                const firstSegId =
+                                  citation.segment_ids && citation.segment_ids.length > 0
+                                    ? citation.segment_ids[0]
+                                    : null;
+                                const targetUrl =
+                                  firstSegId !== null
+                                    ? `/meetings/${citation.meeting_id}?segment=${firstSegId}`
+                                    : `/meetings/${citation.meeting_id}`;
+
+                                return (
+                                  <Link
+                                    key={`${citation.meeting_id}-${citation.chunk_index}-${cIdx}`}
+                                    to={targetUrl}
+                                    className="block rounded-lg border border-slate-200 bg-white p-2.5 transition hover:border-indigo-300 hover:bg-indigo-50/20"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="truncate text-xs font-semibold text-slate-800">
+                                        {citation.meeting_title}
+                                      </span>
+                                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-indigo-600">
+                                        <Clock className="h-3 w-3" />
+                                        {formatCitationRange(citation)}
+                                        <ExternalLink className="h-3 w-3" />
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-slate-600">
+                                      &ldquo;{citation.excerpt}&rdquo;
+                                    </p>
+                                  </Link>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -410,7 +639,9 @@ export function ChatPage() {
                     <div className="rounded-2xl rounded-bl-xs border border-slate-200/80 bg-slate-100 px-4 py-3 text-sm text-slate-600 shadow-2xs flex items-center gap-2">
                       <Sparkles className="h-4 w-4 text-indigo-600 animate-spin" />
                       <span className="text-xs font-medium">
-                        MeetMind is thinking...
+                        {chatMode === 'meeting'
+                          ? 'Searching meeting transcripts & generating grounded answer...'
+                          : 'MeetMind is thinking...'}
                       </span>
                     </div>
                   </div>
@@ -448,7 +679,13 @@ export function ChatPage() {
                 onKeyDown={handleKeyDown}
                 rows={2}
                 disabled={isSendingMessage}
-                placeholder="Ask MeetMind anything... (Press Enter to send, Shift+Enter for new line)"
+                placeholder={
+                  chatMode === 'meeting'
+                    ? selectedMeeting
+                      ? `Ask about "${selectedMeeting.title}"... (Enter to send)`
+                      : 'Ask across your indexed meetings... (Enter to send)'
+                    : 'Ask MeetMind anything... (Press Enter to send, Shift+Enter for new line)'
+                }
                 className="w-full resize-none rounded-xl border border-slate-300 bg-white p-3 pr-14 text-sm text-slate-800 placeholder-slate-400 shadow-2xs transition focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 disabled:bg-slate-100"
               />
               <button
@@ -465,7 +702,11 @@ export function ChatPage() {
               </button>
             </form>
             <div className="mt-1 flex items-center justify-between px-1 text-[11px] text-slate-400">
-              <span>Local Ollama • Privacy-First</span>
+              <span>
+                {chatMode === 'meeting'
+                  ? 'Meeting-Aware RAG • pgvector + Local Ollama'
+                  : 'Local Ollama • Privacy-First'}
+              </span>
               <span className="hidden sm:inline">Enter to send • Shift+Enter for new line</span>
             </div>
           </div>

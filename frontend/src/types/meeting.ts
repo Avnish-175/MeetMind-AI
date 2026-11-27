@@ -8,6 +8,14 @@ export type MeetingProcessingStatus =
   | 'failed'
   | (string & {});
 
+export type EmbeddingStatus =
+  | 'not_indexed'
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | (string & {});
+
 export interface Meeting {
   id: number;
   user_id: number;
@@ -20,8 +28,17 @@ export interface Meeting {
   duration_seconds: number | null;
   processing_status: MeetingProcessingStatus;
   processing_error?: string | null;
+  embedding_status?: EmbeddingStatus;
+  embedding_error?: string | null;
+  indexed_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface IndexingStartResponse {
+  meeting_id: number;
+  embedding_status: string;
+  message: string;
 }
 
 export interface MeetingListResponse {

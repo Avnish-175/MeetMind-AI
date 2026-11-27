@@ -9,6 +9,53 @@ DEFAULT_CHAT_SYSTEM_PROMPT = (
     "Provide clear, accurate, and structured answers to the user's queries using Markdown when appropriate."
 )
 
+RAG_CHAT_SYSTEM_PROMPT = (
+    "You are MeetMind AI, a strict, factual meeting intelligence assistant.\n\n"
+    "GROUNDING RULES:\n"
+    "1. Answer the user's question ONLY using the retrieved meeting transcript excerpts provided below.\n"
+    "2. If the retrieved excerpts do not contain enough information to answer the question, "
+    "explicitly state that the available meeting information is insufficient.\n"
+    "3. NEVER invent, assume, or extrapolate meeting decisions, dates, commitments, attendees, or quotations.\n"
+    "4. Do NOT present general model knowledge as if it came from a meeting.\n"
+    "5. Reference the meeting title and timestamp when citing specific points."
+)
+
+
+def build_rag_context_prompt(
+    question: str,
+    retrieved_chunks: list[dict[str, Any]],
+) -> str:
+    """Format retrieved meeting transcript excerpts and the user question into a grounded prompt."""
+    context_blocks: list[str] = []
+    for idx, chunk in enumerate(retrieved_chunks, start=1):
+        meeting_title = chunk.get("meeting_title", f"Meeting #{chunk.get('meeting_id')}")
+        start_time = chunk.get("start_time")
+        end_time = chunk.get("end_time")
+        segment_ids = chunk.get("segment_ids") or []
+
+        if start_time is not None and end_time is not None:
+            time_str = f"{start_time:.1f}s - {end_time:.1f}s"
+        elif start_time is not None:
+            time_str = f"{start_time:.1f}s"
+        else:
+            time_str = "N/A"
+
+        seg_str = ", ".join(str(s) for s in segment_ids) if segment_ids else "N/A"
+        content = chunk.get("content", "").strip()
+
+        context_blocks.append(
+            f"[Excerpt {idx}] Meeting: \"{meeting_title}\" | Timestamp: {time_str} | Segments: [{seg_str}]\n"
+            f"{content}"
+        )
+
+    joined_context = "\n\n---\n\n".join(context_blocks)
+    return (
+        "RETRIEVED MEETING TRANSCRIPT EXCERPTS:\n\n"
+        f"{joined_context}\n\n"
+        "---\n\n"
+        f"USER QUESTION:\n{question}"
+    )
+
 
 def chunk_transcript_segments(
     segments: list[dict[str, Any]],

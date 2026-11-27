@@ -7,6 +7,7 @@ import {
   fetchMeetingTranscript,
   fetchMeetings,
   startMeetingAnalysis,
+  startMeetingIndexing,
   startMeetingTranscription,
 } from '../services/meetingApi';
 import type {
@@ -27,17 +28,20 @@ interface MeetingState {
   isLoadingAnalysis: boolean;
   isStartingTranscription: boolean;
   isStartingAnalysis: boolean;
+  isStartingIndexing: boolean;
   isDeletingId: number | null;
   error: string | null;
   detailError: string | null;
   transcriptError: string | null;
   analysisError: string | null;
+  indexingError: string | null;
   loadMeetings: () => Promise<void>;
   loadMeetingById: (meetingId: number, silent?: boolean) => Promise<void>;
   loadTranscript: (meetingId: number, silent?: boolean) => Promise<void>;
   loadAnalysis: (meetingId: number, silent?: boolean) => Promise<MeetingAnalysis | null>;
   triggerTranscription: (meetingId: number) => Promise<void>;
   triggerAnalysis: (meetingId: number) => Promise<void>;
+  triggerIndexing: (meetingId: number) => Promise<void>;
   removeMeeting: (meetingId: number) => Promise<void>;
   clearSelectedMeeting: () => void;
   clearMeetings: () => void;
@@ -56,11 +60,13 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
   isLoadingAnalysis: false,
   isStartingTranscription: false,
   isStartingAnalysis: false,
+  isStartingIndexing: false,
   isDeletingId: null,
   error: null,
   detailError: null,
   transcriptError: null,
   analysisError: null,
+  indexingError: null,
 
   loadMeetings: async () => {
     set({ isLoading: true, error: null });
@@ -172,6 +178,23 @@ export const useMeetingStore = create<MeetingState>((set, get) => ({
       set({
         isStartingAnalysis: false,
         analysisError: extractMeetingErrorMessage(err, 'Failed to start meeting analysis.'),
+      });
+    }
+  },
+
+  triggerIndexing: async (meetingId: number) => {
+    if (get().isStartingIndexing) {
+      return;
+    }
+    set({ isStartingIndexing: true, indexingError: null });
+    try {
+      await startMeetingIndexing(meetingId);
+      await get().loadMeetingById(meetingId, true);
+      set({ isStartingIndexing: false });
+    } catch (err) {
+      set({
+        isStartingIndexing: false,
+        indexingError: extractMeetingErrorMessage(err, 'Failed to start meeting indexing.'),
       });
     }
   },

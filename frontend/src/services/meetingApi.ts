@@ -1,6 +1,7 @@
 import axios from 'axios';
 import api from './api';
 import type {
+  IndexingStartResponse,
   Meeting,
   MeetingAnalysis,
   MeetingListResponse,
@@ -103,6 +104,15 @@ export async function startMeetingAnalysis(
 ): Promise<StartAnalysisResponse> {
   const response = await api.post<StartAnalysisResponse>(
     `/api/v1/meetings/${meetingId}/analyze`
+  );
+  return response.data;
+}
+
+export async function startMeetingIndexing(
+  meetingId: number
+): Promise<IndexingStartResponse> {
+  const response = await api.post<IndexingStartResponse>(
+    `/api/v1/meetings/${meetingId}/index`
   );
   return response.data;
 }

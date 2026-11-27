@@ -7,6 +7,7 @@ from app.schemas.auth import (
 from app.schemas.chat import (
     ChatMessageCreate,
     ChatMessageResponse,
+    CitationItem,
     ConversationCreate,
     ConversationDetailResponse,
     ConversationListResponse,
@@ -14,6 +15,8 @@ from app.schemas.chat import (
     ConversationUpdate,
 )
 from app.schemas.meeting import (
+    IndexingStartResponse,
+    IndexingStatusResponse,
     MeetingCreateMetadata,
     MeetingListResponse,
     MeetingResponse,
@@ -49,6 +52,8 @@ __all__ = [
     "MeetingResponse",
     "MeetingListResponse",
     "TranscriptionStartResponse",
+    "IndexingStartResponse",
+    "IndexingStatusResponse",
     "TranscriptSegment",
     "MeetingTranscriptCreate",
     "MeetingTranscriptResponse",
@@ -65,6 +70,7 @@ __all__ = [
     "TraditionalNLPResult",
     "ChatMessageCreate",
     "ChatMessageResponse",
+    "CitationItem",
     "ConversationCreate",
     "ConversationUpdate",
     "ConversationResponse",

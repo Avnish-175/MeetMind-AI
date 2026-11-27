@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
@@ -23,6 +23,21 @@ class ChatMessage(Base):
     )
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(
+        String(20),
+        default="general",
+        server_default="general",
+        nullable=False,
+    )
+    meeting_id: Mapped[int | None] = mapped_column(
+        ForeignKey("meetings.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    citations: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

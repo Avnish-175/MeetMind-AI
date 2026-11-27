@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_DIMENSION: int = 384
     EMBEDDING_DEVICE: str = "cpu"
+    RAG_CHUNK_SIZE: int = 800
+    RAG_CHUNK_OVERLAP: int = 150
+    RAG_TOP_K: int = 5
+    RAG_MIN_SIMILARITY: float = 0.25
 
     model_config = SettingsConfigDict(
         env_file=(str(BACKEND_DIR / ".env"), ".env"),

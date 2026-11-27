@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
   Calendar,
+  CheckCircle2,
   Clock,
+  Database,
   FileAudio,
   FileText,
   FileVideo,
@@ -30,6 +32,7 @@ const POLL_INTERVAL_MS = 3000;
 
 export function MeetingDetailPage() {
   const { meetingId } = useParams<{ meetingId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
   const {
@@ -41,15 +44,18 @@ export function MeetingDetailPage() {
     isLoadingAnalysis,
     isStartingTranscription,
     isStartingAnalysis,
+    isStartingIndexing,
     isDeletingId,
     detailError,
     transcriptError,
     analysisError,
+    indexingError,
     loadMeetingById,
     loadTranscript,
     loadAnalysis,
     triggerTranscription,
     triggerAnalysis,
+    triggerIndexing,
     removeMeeting,
     clearSelectedMeeting,
   } = useMeetingStore();
@@ -133,6 +139,37 @@ export function MeetingDetailPage() {
       }, 2500);
     }
   }, []);
+
+  // Poll embedding indexing status while pending or processing
+  useEffect(() => {
+    const embStatus = selectedMeeting?.embedding_status;
+    if (!isValidId || (embStatus !== 'pending' && embStatus !== 'processing')) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadMeetingById(numericId, true);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isValidId, numericId, selectedMeeting?.embedding_status, loadMeetingById]);
+
+  // Jump to cited segment if ?segment=<id> is present when transcript loads
+  useEffect(() => {
+    const segParam = searchParams.get('segment');
+    if (!segParam || !transcript?.segments?.length) {
+      return;
+    }
+    const segId = Number(segParam);
+    if (Number.isInteger(segId) && segId >= 0) {
+      const timer = window.setTimeout(() => {
+        handleJumpToSegment(segId);
+      }, 150);
+      return () => window.clearTimeout(timer);
+    }
+  }, [searchParams, transcript?.segments, handleJumpToSegment]);
 
   const handleConfirmDelete = async () => {
     if (!selectedMeeting) {
@@ -406,7 +443,55 @@ export function MeetingDetailPage() {
               Transcribe Meeting
             </button>
           )}
+
+          {hasUsableTranscript && (
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedMeeting.embedding_status === 'completed' && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Indexed for AI Chat
+                </span>
+              )}
+              {(selectedMeeting.embedding_status === 'pending' ||
+                selectedMeeting.embedding_status === 'processing' ||
+                isStartingIndexing) && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Indexing...
+                </span>
+              )}
+              <button
+                type="button"
+                disabled={
+                  isStartingIndexing ||
+                  selectedMeeting.embedding_status === 'pending' ||
+                  selectedMeeting.embedding_status === 'processing'
+                }
+                onClick={() => void triggerIndexing(selectedMeeting.id)}
+                className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 disabled:opacity-50"
+              >
+                <Database className="h-3.5 w-3.5 text-indigo-600" />
+                {selectedMeeting.embedding_status === 'completed'
+                  ? 'Re-index for AI Chat'
+                  : 'Index for AI Chat'}
+              </button>
+            </div>
+          )}
         </div>
+
+        {(indexingError ||
+          (selectedMeeting.embedding_status === 'failed' &&
+            selectedMeeting.embedding_error)) && (
+          <div
+            role="alert"
+            className="flex items-start gap-2.5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              {indexingError ?? `Indexing failed: ${selectedMeeting.embedding_error}`}
+            </span>
+          </div>
+        )}
 
         {transcriptError && (
           <div

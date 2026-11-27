@@ -43,6 +43,9 @@ class MeetingResponse(BaseModel):
     duration_seconds: float | None
     processing_status: str
     processing_error: str | None = None
+    embedding_status: str = "not_indexed"
+    embedding_error: str | None = None
+    indexed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -60,3 +63,21 @@ class TranscriptionStartResponse(BaseModel):
     meeting_id: int
     processing_status: str
     message: str
+
+
+class IndexingStartResponse(BaseModel):
+    """Response returned when a meeting embedding indexing job is accepted."""
+
+    meeting_id: int
+    embedding_status: str
+    message: str
+
+
+class IndexingStatusResponse(BaseModel):
+    """Current embedding indexing status for a meeting."""
+
+    meeting_id: int
+    embedding_status: str
+    embedding_error: str | None = None
+    indexed_at: datetime | None = None
+    chunk_count: int = 0

@@ -1,8 +1,24 @@
+export type ChatMode = 'general' | 'meeting';
+
+export interface CitationItem {
+  meeting_id: number;
+  meeting_title: string;
+  chunk_index: number;
+  start_time: number | null;
+  end_time: number | null;
+  segment_ids: number[];
+  excerpt: string;
+  similarity_score: number;
+}
+
 export interface ChatMessage {
   id: number;
   conversation_id: number;
   role: 'user' | 'assistant';
   content: string;
+  mode?: ChatMode;
+  meeting_id?: number | null;
+  citations?: CitationItem[] | null;
   created_at: string;
 }
 
@@ -33,4 +49,6 @@ export interface UpdateConversationPayload {
 
 export interface SendMessagePayload {
   content: string;
+  mode?: ChatMode;
+  meeting_id?: number | null;
 }

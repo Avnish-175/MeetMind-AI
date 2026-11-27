@@ -1,0 +1,182 @@
+import logging
+from typing import Any
+
+from fastapi import HTTPException, status
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
+
+from app.ai.embedding_service import EmbeddingServiceError, generate_embeddings
+from app.database.session import SessionLocal
+from app.models.meeting import Meeting
+from app.models.meeting_embedding import MeetingEmbedding
+from app.models.transcript import MeetingTranscript
+from app.services.chunking_service import ChunkingError, chunk_transcript
+
+logger = logging.getLogger(__name__)
+
+
+def start_meeting_indexing_job(
+    db: Session,
+    meeting_id: int,
+    user_id: int,
+) -> Meeting:
+    """Validate ownership and transcript availability, then mark the meeting as pending indexing."""
+    meeting = (
+        db.query(Meeting)
+        .filter(Meeting.id == meeting_id, Meeting.user_id == user_id)
+        .first()
+    )
+    if meeting is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found.",
+        )
+
+    if meeting.embedding_status in ("pending", "processing"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Indexing is already in progress for this meeting.",
+        )
+
+    transcript = (
+        db.query(MeetingTranscript)
+        .filter(MeetingTranscript.meeting_id == meeting_id)
+        .first()
+    )
+    if transcript is None or (
+        not (transcript.full_text or "").strip() and not transcript.segments
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Meeting must have a completed transcript before indexing.",
+        )
+
+    meeting.embedding_status = "pending"
+    meeting.embedding_error = None
+    db.commit()
+    db.refresh(meeting)
+    return meeting
+
+
+def get_meeting_indexing_status(
+    db: Session,
+    meeting_id: int,
+    user_id: int,
+) -> dict[str, Any]:
+    """Return the current embedding indexing status and chunk count for a user-owned meeting."""
+    meeting = (
+        db.query(Meeting)
+        .filter(Meeting.id == meeting_id, Meeting.user_id == user_id)
+        .first()
+    )
+    if meeting is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found.",
+        )
+
+    chunk_count = (
+        db.execute(
+            select(func.count(MeetingEmbedding.id)).where(
+                MeetingEmbedding.meeting_id == meeting_id,
+                MeetingEmbedding.user_id == user_id,
+            )
+        ).scalar_one()
+        or 0
+    )
+
+    return {
+        "meeting_id": meeting.id,
+        "embedding_status": meeting.embedding_status,
+        "embedding_error": meeting.embedding_error,
+        "indexed_at": meeting.indexed_at,
+        "chunk_count": int(chunk_count),
+    }
+
+
+def process_meeting_indexing_task(meeting_id: int) -> None:
+    """Background task that chunks the transcript, generates embeddings, and atomically updates pgvector.
+
+    Existing embeddings are only deleted inside the same transaction after new chunks
+    and embeddings have been validated and generated successfully.
+    """
+    db = SessionLocal()
+    try:
+        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if meeting is None:
+            logger.error("Indexing task aborted: meeting %d not found.", meeting_id)
+            return
+
+        meeting.embedding_status = "processing"
+        meeting.embedding_error = None
+        db.commit()
+
+        transcript = (
+            db.query(MeetingTranscript)
+            .filter(MeetingTranscript.meeting_id == meeting_id)
+            .first()
+        )
+        if transcript is None:
+            raise ChunkingError("Meeting transcript not found.")
+
+        chunks = chunk_transcript(transcript)
+        if not chunks:
+            raise ChunkingError("Transcript produced no indexable text chunks.")
+
+        texts = [c.content for c in chunks]
+        vectors = generate_embeddings(texts)
+        if len(vectors) != len(chunks):
+            raise EmbeddingServiceError(
+                f"Embedding count mismatch: expected {len(chunks)}, got {len(vectors)}."
+            )
+
+        # Atomic replacement: delete old embeddings and insert new ones in one transaction
+        db.execute(
+            delete(MeetingEmbedding).where(
+                MeetingEmbedding.meeting_id == meeting.id,
+                MeetingEmbedding.user_id == meeting.user_id,
+            )
+        )
+
+        records = [
+            MeetingEmbedding(
+                meeting_id=meeting.id,
+                user_id=meeting.user_id,
+                content=chunk.content,
+                embedding=vector,
+                chunk_index=chunk.chunk_index,
+                chunk_metadata={
+                    "start_time": chunk.start_time,
+                    "end_time": chunk.end_time,
+                    "segment_ids": chunk.segment_ids,
+                },
+            )
+            for chunk, vector in zip(chunks, vectors)
+        ]
+        db.add_all(records)
+
+        meeting.embedding_status = "completed"
+        meeting.embedding_error = None
+        meeting.indexed_at = func.now()
+        db.commit()
+
+        logger.info(
+            "Successfully indexed %d chunks for meeting %d (user %d).",
+            len(records),
+            meeting.id,
+            meeting.user_id,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error("Indexing failed for meeting %d: %s", meeting_id, exc)
+        try:
+            meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+            if meeting is not None:
+                meeting.embedding_status = "failed"
+                meeting.embedding_error = str(exc)[:1000]
+                db.commit()
+        except Exception as status_exc:
+            logger.error("Failed to persist indexing error status for meeting %d: %s", meeting_id, status_exc)
+            db.rollback()
+    finally:
+        db.close()

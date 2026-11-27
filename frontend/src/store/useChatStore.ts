@@ -10,6 +10,7 @@ import {
 } from '../services/chatApi';
 import type {
   ChatMessage,
+  ChatMode,
   Conversation,
   ConversationDetail,
 } from '../types/chat';
@@ -18,6 +19,8 @@ interface ChatState {
   conversations: Conversation[];
   activeConversationId: number | null;
   currentConversation: ConversationDetail | null;
+  chatMode: ChatMode;
+  selectedMeetingId: number | null;
   isLoadingConversations: boolean;
   isLoadingMessages: boolean;
   isSendingMessage: boolean;
@@ -28,6 +31,8 @@ interface ChatState {
   loadConversations: () => Promise<void>;
   selectConversation: (id: number) => Promise<void>;
   startNewConversation: (title?: string) => Promise<Conversation | null>;
+  setChatMode: (mode: ChatMode) => void;
+  setSelectedMeetingId: (meetingId: number | null) => void;
   sendMessage: (content: string) => Promise<void>;
   updateTitle: (id: number, title: string) => Promise<void>;
   removeConversation: (id: number) => Promise<void>;
@@ -39,6 +44,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
   currentConversation: null,
+  chatMode: 'general',
+  selectedMeetingId: null,
   isLoadingConversations: false,
   isLoadingMessages: false,
   isSendingMessage: false,
@@ -110,9 +117,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  setChatMode: (mode: ChatMode) => {
+    set({ chatMode: mode });
+  },
+
+  setSelectedMeetingId: (meetingId: number | null) => {
+    set({ selectedMeetingId: meetingId });
+  },
+
   sendMessage: async (content: string) => {
     const trimmed = content.trim();
     if (!trimmed) return;
+
+    const { chatMode, selectedMeetingId } = get();
+    const resolvedMeetingId = chatMode === 'meeting' ? selectedMeetingId : null;
 
     let targetId = get().activeConversationId;
 
@@ -131,6 +149,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversation_id: targetId,
       role: 'user',
       content: trimmed,
+      mode: chatMode,
+      meeting_id: resolvedMeetingId,
       created_at: new Date().toISOString(),
     };
 
@@ -147,7 +167,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ isSendingMessage: true, error: null });
 
     try {
-      const assistantMsg = await sendChatMessage(targetId, trimmed);
+      await sendChatMessage(targetId, trimmed, chatMode, resolvedMeetingId);
 
       // Re-fetch conversation details to get synced messages from database
       const updatedDetail = await fetchConversationById(targetId);

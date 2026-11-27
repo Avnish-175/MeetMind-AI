@@ -4,10 +4,25 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class CitationItem(BaseModel):
+    """Structured source citation returned for meeting-aware RAG responses."""
+
+    meeting_id: int
+    meeting_title: str
+    chunk_index: int
+    start_time: float | None = None
+    end_time: float | None = None
+    segment_ids: list[int] = []
+    excerpt: str
+    similarity_score: float
+
+
 class ChatMessageCreate(BaseModel):
     """Schema for sending a new message in a conversation."""
 
     content: str = Field(..., min_length=1)
+    mode: Literal["general", "meeting"] = "general"
+    meeting_id: int | None = Field(default=None, gt=0)
 
     @field_validator("content")
     @classmethod
@@ -27,6 +42,9 @@ class ChatMessageResponse(BaseModel):
     conversation_id: int
     role: Literal["user", "assistant"]
     content: str
+    mode: str = "general"
+    meeting_id: int | None = None
+    citations: list[CitationItem] | None = None
     created_at: datetime
 
 
