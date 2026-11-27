@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertCircle,
@@ -10,17 +10,23 @@ import {
   FileVideo,
   HardDrive,
   Info,
+  Loader2,
+  MessageSquareText,
   Trash2,
 } from 'lucide-react';
 import { DeleteMeetingModal } from '../../components/meetings/DeleteMeetingModal';
+import { MeetingAnalysisSection } from '../../components/meetings/MeetingAnalysisSection';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useMeetingStore } from '../../store/useMeetingStore';
 import {
   formatDuration,
   formatFileSize,
   formatMeetingDate,
+  formatTimestamp,
   getStatusBadgeInfo,
 } from '../../utils/meetingFormat';
+
+const POLL_INTERVAL_MS = 3000;
 
 export function MeetingDetailPage() {
   const { meetingId } = useParams<{ meetingId: string }>();
@@ -28,10 +34,22 @@ export function MeetingDetailPage() {
 
   const {
     selectedMeeting,
+    transcript,
+    analysis,
     isLoadingDetail,
+    isLoadingTranscript,
+    isLoadingAnalysis,
+    isStartingTranscription,
+    isStartingAnalysis,
     isDeletingId,
     detailError,
+    transcriptError,
+    analysisError,
     loadMeetingById,
+    loadTranscript,
+    loadAnalysis,
+    triggerTranscription,
+    triggerAnalysis,
     removeMeeting,
     clearSelectedMeeting,
   } = useMeetingStore();
@@ -40,6 +58,7 @@ export function MeetingDetailPage() {
 
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [highlightedSegmentId, setHighlightedSegmentId] = useState<number | null>(null);
 
   const numericId = meetingId ? Number(meetingId) : NaN;
   const isValidId = Number.isInteger(numericId) && numericId > 0;
@@ -49,10 +68,71 @@ export function MeetingDetailPage() {
       return;
     }
     void loadMeetingById(numericId);
+    void loadTranscript(numericId);
+    void loadAnalysis(numericId);
     return () => {
       clearSelectedMeeting();
     };
-  }, [isValidId, numericId, loadMeetingById, clearSelectedMeeting]);
+  }, [
+    isValidId,
+    numericId,
+    loadMeetingById,
+    loadTranscript,
+    loadAnalysis,
+    clearSelectedMeeting,
+  ]);
+
+  // Poll analysis status while processing or pending; stop on completion/failure/unmount
+  useEffect(() => {
+    if (!isValidId) {
+      return;
+    }
+    const status = analysis?.status;
+    if (status !== 'processing' && status !== 'pending') {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadAnalysis(numericId, true);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isValidId, numericId, analysis?.status, loadAnalysis]);
+
+  // Poll meeting transcription status while processing
+  useEffect(() => {
+    if (!isValidId || selectedMeeting?.processing_status !== 'processing') {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadMeetingById(numericId, true);
+      void loadTranscript(numericId, true);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    isValidId,
+    numericId,
+    selectedMeeting?.processing_status,
+    loadMeetingById,
+    loadTranscript,
+  ]);
+
+  const handleJumpToSegment = useCallback((segmentId: number) => {
+    const element = document.getElementById(`transcript-segment-${segmentId}`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedSegmentId(segmentId);
+      window.setTimeout(() => {
+        setHighlightedSegmentId((current) => (current === segmentId ? null : current));
+      }, 2500);
+    }
+  }, []);
 
   const handleConfirmDelete = async () => {
     if (!selectedMeeting) {
@@ -141,6 +221,11 @@ export function MeetingDetailPage() {
 
   const statusBadge = getStatusBadgeInfo(selectedMeeting.processing_status);
   const isVideo = selectedMeeting.media_type === 'video';
+  const hasUsableTranscript = Boolean(
+    transcript && transcript.segments && transcript.segments.length > 0
+  );
+  const isTranscribing =
+    isStartingTranscription || selectedMeeting.processing_status === 'processing';
 
   return (
     <div className="space-y-6">
@@ -286,14 +371,101 @@ export function MeetingDetailPage() {
         </dl>
       </section>
 
-      {/* Processing Notice */}
-      <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-5 py-4 text-sm text-slate-600">
-        <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
-        <p>
-          This meeting media file is stored locally and ready for future transcription and AI
-          analysis workflows.
-        </p>
-      </div>
+      {/* Meeting Intelligence (Step 7E) */}
+      <MeetingAnalysisSection
+        analysis={analysis}
+        hasUsableTranscript={hasUsableTranscript}
+        isLoading={isLoadingAnalysis}
+        isStarting={isStartingAnalysis}
+        error={analysisError}
+        onStartAnalysis={() => void triggerAnalysis(selectedMeeting.id)}
+        onJumpToSegment={handleJumpToSegment}
+      />
+
+      {/* Timestamped Transcript Section */}
+      <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-xs">
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <MessageSquareText className="h-4 w-4 text-indigo-600" />
+              <h2 className="text-base font-semibold text-slate-900">Transcript</h2>
+            </div>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {transcript
+                ? `${transcript.segments.length} timestamped segments • Language: ${transcript.language ?? 'unknown'} • Model: ${transcript.model_name}`
+                : 'Timestamped speech-to-text transcript generated locally via Faster-Whisper.'}
+            </p>
+          </div>
+
+          {!transcript && !isTranscribing && (
+            <button
+              type="button"
+              onClick={() => void triggerTranscription(selectedMeeting.id)}
+              className="inline-flex w-fit items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3.5 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+            >
+              Transcribe Meeting
+            </button>
+          )}
+        </div>
+
+        {transcriptError && (
+          <div
+            role="alert"
+            className="flex items-start gap-2.5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{transcriptError}</span>
+          </div>
+        )}
+
+        {isLoadingTranscript && !transcript ? (
+          <div className="space-y-2.5">
+            {[1, 2, 3].map((idx) => (
+              <div key={idx} className="h-12 animate-pulse rounded-lg bg-slate-100" />
+            ))}
+          </div>
+        ) : isTranscribing ? (
+          <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-4 text-xs text-amber-800">
+            <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+            <span>Transcription is in progress... Segments will appear automatically when ready.</span>
+          </div>
+        ) : !transcript || transcript.segments.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/70 px-4 py-8 text-center text-xs text-slate-500">
+            {selectedMeeting.processing_status === 'failed' && selectedMeeting.processing_error
+              ? `Transcription failed: ${selectedMeeting.processing_error}`
+              : 'No transcript available yet. Click "Transcribe Meeting" above to generate timestamped segments.'}
+          </div>
+        ) : (
+          <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+            {transcript.segments.map((segment) => {
+              const isHighlighted = highlightedSegmentId === segment.id;
+              return (
+                <div
+                  key={segment.id}
+                  id={`transcript-segment-${segment.id}`}
+                  className={`flex flex-col gap-1 rounded-lg border px-3.5 py-2.5 transition-colors sm:flex-row sm:items-start sm:gap-3 ${
+                    isHighlighted
+                      ? 'border-indigo-400 bg-indigo-50/80 ring-2 ring-indigo-300'
+                      : 'border-slate-100 bg-slate-50/60 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex shrink-0 items-center gap-2 sm:w-36">
+                    <span className="rounded bg-slate-200/80 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700">
+                      #{segment.id}
+                    </span>
+                    <span className="text-[11px] font-medium text-slate-500">
+                      {formatTimestamp(segment.start)} – {formatTimestamp(segment.end)}
+                    </span>
+                  </div>
+                  <p className="text-sm leading-relaxed text-slate-800">
+                    {segment.text}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {/* Delete Confirmation Modal */}
       <DeleteMeetingModal
