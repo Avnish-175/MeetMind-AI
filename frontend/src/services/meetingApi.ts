@@ -1,0 +1,95 @@
+import axios from 'axios';
+import api from './api';
+import type { Meeting, MeetingListResponse, UploadMeetingPayload } from '../types/meeting';
+
+export async function fetchMeetings(): Promise<MeetingListResponse> {
+  const response = await api.get<MeetingListResponse>('/api/v1/meetings');
+  return response.data;
+}
+
+export async function fetchMeetingById(meetingId: number): Promise<Meeting> {
+  const response = await api.get<Meeting>(`/api/v1/meetings/${meetingId}`);
+  return response.data;
+}
+
+export async function uploadMeeting({
+  title,
+  description,
+  file,
+  onUploadProgress,
+  signal,
+}: UploadMeetingPayload): Promise<Meeting> {
+  const formData = new FormData();
+  formData.append('title', title.trim());
+
+  const trimmedDescription = description?.trim();
+  if (trimmedDescription) {
+    formData.append('description', trimmedDescription);
+  }
+
+  formData.append('file', file);
+
+  const response = await api.post<Meeting>('/api/v1/meetings', formData, {
+    timeout: 0,
+    signal,
+    onUploadProgress: (event) => {
+      if (!onUploadProgress || !event.total) {
+        return;
+      }
+      const percent = Math.min(100, Math.round((event.loaded * 100) / event.total));
+      onUploadProgress(percent);
+    },
+  });
+
+  return response.data;
+}
+
+export async function deleteMeeting(meetingId: number): Promise<void> {
+  await api.delete(`/api/v1/meetings/${meetingId}`);
+}
+
+export function isRequestCanceled(error: unknown): boolean {
+  return axios.isCancel(error);
+}
+
+export function extractMeetingErrorMessage(
+  error: unknown,
+  fallback = 'An unexpected error occurred. Please try again.'
+): string {
+  if (axios.isCancel(error)) {
+    return 'Upload was canceled.';
+  }
+
+  if (axios.isAxiosError(error)) {
+    if (!error.response) {
+      return 'Unable to connect to the server. Please check your connection and try again.';
+    }
+
+    const detail = error.response.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+
+    const status = error.response.status;
+    if (status === 401) {
+      return 'Your session has expired. Please sign in again.';
+    }
+    if (status === 404) {
+      return 'Meeting not found.';
+    }
+    if (status === 413) {
+      return 'The selected file exceeds the maximum allowed upload size.';
+    }
+    if (status === 415) {
+      return 'Unsupported media format. Please choose a valid audio or video file.';
+    }
+    if (status === 422) {
+      return 'Please check the meeting title, description, and selected file.';
+    }
+    if (status >= 500) {
+      return 'A server error occurred while processing your request. Please try again.';
+    }
+  }
+
+  return fallback;
+}

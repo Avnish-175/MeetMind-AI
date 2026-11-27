@@ -1,6 +1,5 @@
 import { Route, Routes } from 'react-router-dom';
 import {
-  Video,
   Bot,
   Calendar,
   CheckSquare,
@@ -14,6 +13,8 @@ import { PublicOnlyRoute } from '../components/auth/PublicOnlyRoute';
 import { LoginPage } from '../pages/auth/LoginPage';
 import { RegisterPage } from '../pages/auth/RegisterPage';
 import { DashboardPage } from '../pages/dashboard/DashboardPage';
+import { MeetingsPage } from '../pages/meetings/MeetingsPage';
+import { MeetingDetailPage } from '../pages/meetings/MeetingDetailPage';
 
 export function AppRoutes() {
   return (
@@ -26,16 +27,8 @@ export function AppRoutes() {
       <Route element={<ProtectedRoute />}>
         <Route element={<MainLayout />}>
         <Route path="/" element={<DashboardPage />} />
-        <Route
-          path="/meetings"
-          element={
-            <PlaceholderPage
-              title="Meetings"
-              description="Upload, record, transcribe, and review multimodal meeting sessions."
-              icon={Video}
-            />
-          }
-        />
+        <Route path="/meetings" element={<MeetingsPage />} />
+        <Route path="/meetings/:meetingId" element={<MeetingDetailPage />} />
         <Route
           path="/chat"
           element={

@@ -2,6 +2,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
@@ -13,6 +14,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    UPLOAD_DIR: str = str(PROJECT_ROOT / "storage" / "uploads")
+    MAX_UPLOAD_SIZE_MB: int = 200
 
     model_config = SettingsConfigDict(
         env_file=(str(BACKEND_DIR / ".env"), ".env"),

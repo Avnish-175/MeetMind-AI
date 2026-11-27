@@ -10,6 +10,7 @@ import {
   getAccessToken,
   setAccessToken,
 } from '../services/tokenStorage';
+import { useMeetingStore } from './useMeetingStore';
 import type { AuthUser, LoginRequest, RegisterRequest } from '../types/auth';
 
 interface AuthState {
@@ -127,6 +128,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     clearAccessToken();
+    useMeetingStore.getState().clearMeetings();
     set({
       user: null,
       accessToken: null,

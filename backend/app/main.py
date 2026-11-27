@@ -1,12 +1,14 @@
 from typing import Any, Dict
 
 from fastapi import Depends, FastAPI, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.meetings import router as meetings_router
 from app.core.config import settings
 from app.database.dependencies import get_db
 
@@ -16,7 +18,19 @@ app = FastAPI(
     version=settings.APP_VERSION,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
 app.include_router(auth_router)
+app.include_router(meetings_router)
 
 
 @app.get("/", tags=["Status"])

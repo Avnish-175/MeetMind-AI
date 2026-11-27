@@ -1,3 +1,11 @@
+export type {
+  Meeting,
+  MeetingListResponse,
+  MeetingMediaType,
+  MeetingProcessingStatus,
+  UploadMeetingPayload,
+} from './meeting';
+
 export interface MeetingSummary {
   id: string;
   title: string;
