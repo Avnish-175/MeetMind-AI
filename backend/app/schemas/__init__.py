@@ -1,9 +1,8 @@
 from app.schemas.auth import (
-    AuthUser,
-    LoginRequest,
-    RegisterRequest,
-    TokenPayload,
     TokenResponse,
+    UserLoginRequest,
+    UserRegisterRequest,
+    UserResponse,
 )
 from app.schemas.meeting import (
     MeetingCreateMetadata,
@@ -25,10 +24,9 @@ from app.schemas.transcript import (
 )
 
 __all__ = [
-    "AuthUser",
-    "LoginRequest",
-    "RegisterRequest",
-    "TokenPayload",
+    "UserRegisterRequest",
+    "UserLoginRequest",
+    "UserResponse",
     "TokenResponse",
     "MeetingCreateMetadata",
     "MeetingResponse",
