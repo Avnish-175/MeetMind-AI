@@ -64,6 +64,8 @@ storage/audio/*
 !storage/audio/.gitkeep
 storage/processed/*
 !storage/processed/.gitkeep
+storage/vector_db/*
+!storage/vector_db/.gitkeep
 
 # Operating System files
 Thumbs.db

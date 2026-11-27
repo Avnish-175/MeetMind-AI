@@ -46,8 +46,19 @@ meetmind-ai/
 
 - **Backend**: Python 3.12+ / FastAPI / Uvicorn / Pydantic
 - **Frontend**: Modern web frontend framework (React / Next.js / TypeScript)
-- **Database & Storage**: SQLite / PostgreSQL (local-first or embedded storage)
-- **Intelligence & Processing**: Multimodal processing pipelines, local/hybrid AI models (Whisper, speech models, LLM agents)
+- **Database & Storage**: PostgreSQL (relational) + ChromaDB (embedded local vector database)
+- **Intelligence & Processing**: Multimodal processing pipelines, local/hybrid AI models (Faster-Whisper, spaCy, Sentence Transformers, Ollama)
+
+---
+
+## Vector Storage & Meeting RAG (ChromaDB)
+
+MeetMind AI uses an embedded **ChromaDB** vector database for local semantic search and Retrieval-Augmented Generation (RAG):
+
+- **Local Persistence**: Embeddings and meeting chunks are stored locally under `storage/vector_db/chroma`. No external server or Docker container is required.
+- **Model**: `sentence-transformers/all-MiniLM-L6-v2` generating 384-dimensional normalized vector embeddings on CPU.
+- **Privacy & Isolation**: Vector queries strictly enforce `user_id` ownership filtering. Meeting chunks from one user are never accessible to another.
+- **Configurable**: Set `CHROMA_PERSIST_DIRECTORY` and `CHROMA_COLLECTION_NAME` in your `.env` file to customize storage paths.
 
 ---
 

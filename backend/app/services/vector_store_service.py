@@ -1,15 +1,20 @@
+import json
 import logging
 import math
+import os
+import threading
 from typing import Any
 
-from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+import chromadb
+from chromadb.api import ClientAPI
+from chromadb.api.models.Collection import Collection
 
 from app.core.config import settings
-from app.models.meeting import Meeting
-from app.models.meeting_embedding import MeetingEmbedding
 
 logger = logging.getLogger(__name__)
+
+_chroma_client: ClientAPI | None = None
+_chroma_lock = threading.Lock()
 
 
 class VectorStoreError(Exception):
@@ -18,6 +23,37 @@ class VectorStoreError(Exception):
 
 class VectorValidationError(VectorStoreError, ValueError):
     """Raised when vector dimensions, content, or parameters are invalid."""
+
+
+def get_chroma_client() -> ClientAPI:
+    """Lazily initialize and return the ChromaDB PersistentClient."""
+    global _chroma_client
+    with _chroma_lock:
+        if _chroma_client is None:
+            os.makedirs(settings.CHROMA_PERSIST_DIRECTORY, exist_ok=True)
+            logger.info(
+                "Initializing ChromaDB PersistentClient at '%s'...",
+                settings.CHROMA_PERSIST_DIRECTORY,
+            )
+            _chroma_client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIRECTORY)
+        return _chroma_client
+
+
+def get_meeting_collection() -> Collection:
+    """Retrieve or create the meeting chunks collection configured with cosine distance."""
+    client = get_chroma_client()
+    try:
+        return client.get_or_create_collection(
+            name=settings.CHROMA_COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"},
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to access ChromaDB collection '%s': %s",
+            settings.CHROMA_COLLECTION_NAME,
+            exc,
+        )
+        raise VectorStoreError(f"Failed to access ChromaDB collection: {exc}") from exc
 
 
 def _validate_vector(embedding: list[float]) -> list[float]:
@@ -56,63 +92,94 @@ def _validate_content(content: str) -> str:
     return content.strip()
 
 
-def _verify_meeting_ownership(db: Session, meeting_id: int, user_id: int) -> None:
-    """Ensure the target meeting exists and belongs to the specified user."""
-    stmt = select(Meeting.id).where(
-        Meeting.id == meeting_id,
-        Meeting.user_id == user_id,
-    )
-    if db.execute(stmt).scalar_one_or_none() is None:
-        raise VectorStoreError(
-            f"Meeting {meeting_id} not found or does not belong to user {user_id}."
-        )
+def _serialize_metadata(
+    meeting_id: int,
+    user_id: int,
+    chunk_index: int,
+    raw_metadata: dict[str, Any] | None = None,
+) -> dict[str, str | int | float | bool]:
+    """Serialize chunk metadata into types accepted by ChromaDB (primitive scalars)."""
+    meta: dict[str, str | int | float | bool] = {
+        "meeting_id": int(meeting_id),
+        "user_id": int(user_id),
+        "chunk_index": int(chunk_index),
+    }
+    if raw_metadata:
+        for k, v in raw_metadata.items():
+            if isinstance(v, (int, float, bool, str)):
+                meta[k] = v
+            elif v is None:
+                continue
+            else:
+                meta[k] = json.dumps(v)
+    return meta
+
+
+def _deserialize_metadata(meta: dict[str, Any] | None) -> dict[str, Any]:
+    """Deserialize metadata retrieved from ChromaDB, restoring complex types like segment_ids."""
+    if not meta:
+        return {}
+    deserialized: dict[str, Any] = dict(meta)
+    if "segment_ids" in deserialized and isinstance(deserialized["segment_ids"], str):
+        try:
+            deserialized["segment_ids"] = json.loads(deserialized["segment_ids"])
+        except Exception:
+            deserialized["segment_ids"] = []
+    return deserialized
 
 
 def store_embedding(
-    db: Session,
     meeting_id: int,
     user_id: int,
     content: str,
     embedding: list[float],
     chunk_index: int = 0,
     metadata: dict[str, Any] | None = None,
-) -> MeetingEmbedding:
-    """Persist a single meeting chunk embedding after validating ownership and dimensions."""
-    _verify_meeting_ownership(db, meeting_id, user_id)
+    db: Any = None,
+) -> dict[str, Any]:
+    """Persist a single meeting chunk embedding in ChromaDB."""
     clean_content = _validate_content(content)
     clean_vector = _validate_vector(embedding)
-
     if chunk_index < 0:
         raise VectorValidationError("chunk_index must be non-negative.")
 
-    record = MeetingEmbedding(
-        meeting_id=meeting_id,
-        user_id=user_id,
-        content=clean_content,
-        embedding=clean_vector,
-        chunk_index=chunk_index,
-        chunk_metadata=metadata,
-    )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    logger.info(
-        "Stored embedding %d for meeting %d (user %d, chunk %d)",
-        record.id,
-        meeting_id,
-        user_id,
-        chunk_index,
-    )
-    return record
+    doc_id = f"m_{meeting_id}_u_{user_id}_c_{chunk_index}"
+    chroma_meta = _serialize_metadata(meeting_id, user_id, chunk_index, metadata)
+
+    collection = get_meeting_collection()
+    try:
+        collection.upsert(
+            ids=[doc_id],
+            embeddings=[clean_vector],
+            documents=[clean_content],
+            metadatas=[chroma_meta],
+        )
+        logger.info(
+            "Stored embedding %s in ChromaDB for meeting %d (user %d, chunk %d)",
+            doc_id,
+            meeting_id,
+            user_id,
+            chunk_index,
+        )
+        return {
+            "id": doc_id,
+            "meeting_id": meeting_id,
+            "user_id": user_id,
+            "chunk_index": chunk_index,
+            "content": clean_content,
+        }
+    except Exception as exc:
+        logger.error("Failed to store embedding in ChromaDB: %s", exc)
+        raise VectorStoreError(f"Failed to store embedding in ChromaDB: {exc}") from exc
 
 
 def store_embeddings_batch(
-    db: Session,
     meeting_id: int,
     user_id: int,
     items: list[dict[str, Any]],
-) -> list[MeetingEmbedding]:
-    """Persist multiple chunk embeddings for a meeting in a single transaction.
+    db: Any = None,
+) -> list[str]:
+    """Persist multiple chunk embeddings for a meeting in ChromaDB.
 
     Each item in `items` must contain:
       - `content`: str
@@ -123,9 +190,11 @@ def store_embeddings_batch(
     if not isinstance(items, list) or len(items) == 0:
         raise VectorValidationError("Batch items must be a non-empty list.")
 
-    _verify_meeting_ownership(db, meeting_id, user_id)
+    ids: list[str] = []
+    embeddings: list[list[float]] = []
+    documents: list[str] = []
+    metadatas: list[dict[str, Any]] = []
 
-    records: list[MeetingEmbedding] = []
     for idx, item in enumerate(items):
         if not isinstance(item, dict):
             raise VectorValidationError(f"Batch item at index {idx} must be a dict.")
@@ -142,61 +211,135 @@ def store_embeddings_batch(
                 f"metadata at batch index {idx} must be a dict or None."
             )
 
-        records.append(
-            MeetingEmbedding(
-                meeting_id=meeting_id,
-                user_id=user_id,
-                content=clean_content,
-                embedding=clean_vector,
-                chunk_index=chunk_index,
-                chunk_metadata=metadata,
-            )
+        doc_id = f"m_{meeting_id}_u_{user_id}_c_{chunk_index}"
+        chroma_meta = _serialize_metadata(meeting_id, user_id, chunk_index, metadata)
+
+        ids.append(doc_id)
+        embeddings.append(clean_vector)
+        documents.append(clean_content)
+        metadatas.append(chroma_meta)
+
+    collection = get_meeting_collection()
+    try:
+        collection.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
         )
-
-    db.add_all(records)
-    db.commit()
-    for rec in records:
-        db.refresh(rec)
-
-    logger.info(
-        "Stored %d embeddings in batch for meeting %d (user %d)",
-        len(records),
-        meeting_id,
-        user_id,
-    )
-    return records
+        logger.info(
+            "Stored %d embeddings in batch in ChromaDB for meeting %d (user %d)",
+            len(ids),
+            meeting_id,
+            user_id,
+        )
+        return ids
+    except Exception as exc:
+        logger.error("Failed to store batch embeddings in ChromaDB: %s", exc)
+        raise VectorStoreError(f"Failed to store batch embeddings in ChromaDB: {exc}") from exc
 
 
 def delete_meeting_embeddings(
-    db: Session,
     meeting_id: int,
     user_id: int,
+    db: Any = None,
 ) -> int:
-    """Delete all embeddings for a meeting owned by `user_id`. Returns deleted row count."""
-    stmt = delete(MeetingEmbedding).where(
-        MeetingEmbedding.meeting_id == meeting_id,
-        MeetingEmbedding.user_id == user_id,
-    )
-    result = db.execute(stmt)
-    db.commit()
-    deleted_count = int(result.rowcount or 0)
-    logger.info(
-        "Deleted %d embeddings for meeting %d (user %d)",
-        deleted_count,
-        meeting_id,
-        user_id,
-    )
-    return deleted_count
+    """Delete all embeddings for a meeting owned by `user_id` from ChromaDB. Returns count."""
+    collection = get_meeting_collection()
+    where_filter = {
+        "$and": [
+            {"meeting_id": int(meeting_id)},
+            {"user_id": int(user_id)},
+        ]
+    }
+    try:
+        existing = collection.get(where=where_filter)
+        existing_ids = existing.get("ids", [])
+        if existing_ids:
+            collection.delete(ids=existing_ids)
+            logger.info(
+                "Deleted %d embeddings from ChromaDB for meeting %d (user %d)",
+                len(existing_ids),
+                meeting_id,
+                user_id,
+            )
+            return len(existing_ids)
+        return 0
+    except Exception as exc:
+        logger.error("Failed to delete embeddings from ChromaDB: %s", exc)
+        raise VectorStoreError(f"Failed to delete embeddings from ChromaDB: {exc}") from exc
+
+
+def atomic_replace_meeting_embeddings(
+    meeting_id: int,
+    user_id: int,
+    items: list[dict[str, Any]],
+) -> list[str]:
+    """Atomically upsert new chunk embeddings and clean up any obsolete chunk IDs.
+
+    Validates all data and upserts new chunks before deleting any obsolete chunk IDs
+    from prior runs, ensuring an interrupted or failed indexing attempt does not leave
+    the meeting without searchable vectors.
+    """
+    collection = get_meeting_collection()
+    where_filter = {
+        "$and": [
+            {"meeting_id": int(meeting_id)},
+            {"user_id": int(user_id)},
+        ]
+    }
+
+    try:
+        existing = collection.get(where=where_filter)
+        old_ids = set(existing.get("ids", []))
+    except Exception as exc:
+        logger.warning("Could not fetch pre-existing chunk IDs from ChromaDB: %s", exc)
+        old_ids = set()
+
+    # Store the validated new batch
+    new_ids = store_embeddings_batch(meeting_id=meeting_id, user_id=user_id, items=items)
+
+    # Prune any IDs that were present in a previous run but not in this run
+    stale_ids = list(old_ids - set(new_ids))
+    if stale_ids:
+        try:
+            collection.delete(ids=stale_ids)
+            logger.info(
+                "Pruned %d stale embedding vectors for meeting %d in ChromaDB",
+                len(stale_ids),
+                meeting_id,
+            )
+        except Exception as exc:
+            logger.warning("Failed to prune stale IDs from ChromaDB: %s", exc)
+
+    return new_ids
+
+
+def get_meeting_chunk_count(meeting_id: int, user_id: int) -> int:
+    """Return the total number of indexed chunks stored in ChromaDB for a meeting."""
+    try:
+        collection = get_meeting_collection()
+        where_filter = {
+            "$and": [
+                {"meeting_id": int(meeting_id)},
+                {"user_id": int(user_id)},
+            ]
+        }
+        res = collection.get(where=where_filter)
+        return len(res.get("ids", []))
+    except Exception as exc:
+        logger.error("Failed to get chunk count from ChromaDB: %s", exc)
+        return 0
 
 
 def search_similar_embeddings(
-    db: Session,
     query_embedding: list[float],
     user_id: int,
     top_k: int = 5,
     meeting_id: int | None = None,
+    db: Any = None,
 ) -> list[dict[str, Any]]:
-    """Search for semantically similar meeting chunks using pgvector cosine distance.
+    """Search for semantically similar meeting chunks using ChromaDB cosine similarity.
 
     Always enforces `user_id` ownership filtering. If `meeting_id` is provided,
     results are further restricted to that meeting owned by `user_id`.
@@ -205,37 +348,61 @@ def search_similar_embeddings(
     if top_k <= 0:
         raise VectorValidationError("top_k must be a positive integer.")
 
-    distance_expr = MeetingEmbedding.embedding.cosine_distance(clean_query).label("distance")
+    collection = get_meeting_collection()
 
-    stmt = (
-        select(
-            MeetingEmbedding.id,
-            MeetingEmbedding.meeting_id,
-            MeetingEmbedding.content,
-            MeetingEmbedding.chunk_index,
-            MeetingEmbedding.chunk_metadata,
-            distance_expr,
+    try:
+        total_count = collection.count()
+        if total_count == 0:
+            return []
+
+        if meeting_id is not None:
+            where_filter: dict[str, Any] = {
+                "$and": [
+                    {"user_id": int(user_id)},
+                    {"meeting_id": int(meeting_id)},
+                ]
+            }
+        else:
+            where_filter = {"user_id": int(user_id)}
+
+        effective_k = min(top_k, total_count)
+        query_response = collection.query(
+            query_embeddings=[clean_query],
+            n_results=effective_k,
+            where=where_filter,
+            include=["documents", "metadatas", "distances"],
         )
-        .where(MeetingEmbedding.user_id == user_id)
-    )
+    except Exception as exc:
+        logger.error("ChromaDB query failed: %s", exc)
+        raise VectorStoreError(f"ChromaDB query failed: {exc}") from exc
 
-    if meeting_id is not None:
-        stmt = stmt.where(MeetingEmbedding.meeting_id == meeting_id)
+    ids_list = query_response.get("ids", [[]])
+    docs_list = query_response.get("documents", [[]])
+    metas_list = query_response.get("metadatas", [[]])
+    distances_list = query_response.get("distances", [[]])
 
-    stmt = stmt.order_by(distance_expr.asc()).limit(top_k)
+    if not ids_list or not ids_list[0]:
+        return []
 
-    rows = db.execute(stmt).all()
+    ids = ids_list[0]
+    docs = docs_list[0] if docs_list else []
+    metas = metas_list[0] if metas_list else []
+    distances = distances_list[0] if distances_list else []
+
     results: list[dict[str, Any]] = []
-    for row in rows:
-        distance = float(row.distance)
+    for doc_id, doc, raw_meta, dist in zip(ids, docs, metas, distances):
+        meta = _deserialize_metadata(raw_meta or {})
+        distance = float(dist) if dist is not None else 1.0
+        # Cosine distance in ChromaDB is in [0, 2]; similarity = 1.0 - distance
         similarity_score = max(0.0, min(1.0, 1.0 - distance))
+
         results.append(
             {
-                "id": row.id,
-                "meeting_id": row.meeting_id,
-                "content": row.content,
-                "chunk_index": row.chunk_index,
-                "metadata": row.chunk_metadata,
+                "id": doc_id,
+                "meeting_id": int(meta.get("meeting_id", meeting_id or 0)),
+                "content": str(doc),
+                "chunk_index": int(meta.get("chunk_index", 0)),
+                "metadata": meta,
                 "similarity_score": similarity_score,
             }
         )

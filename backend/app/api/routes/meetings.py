@@ -211,7 +211,7 @@ def index_meeting_embeddings(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> IndexingStartResponse:
-    """Start background transcript chunking and pgvector embedding indexing for a meeting."""
+    """Start background transcript chunking and vector embedding indexing for a meeting."""
     meeting = start_meeting_indexing_job(
         db=db,
         meeting_id=meeting_id,

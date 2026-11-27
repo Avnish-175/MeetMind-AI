@@ -704,7 +704,7 @@ export function ChatPage() {
             <div className="mt-1 flex items-center justify-between px-1 text-[11px] text-slate-400">
               <span>
                 {chatMode === 'meeting'
-                  ? 'Meeting-Aware RAG • pgvector + Local Ollama'
+                  ? 'Meeting-Aware RAG • ChromaDB + Local Ollama'
                   : 'Local Ollama • Privacy-First'}
               </span>
               <span className="hidden sm:inline">Enter to send • Shift+Enter for new line</span>

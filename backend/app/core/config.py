@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     EMBEDDING_DIMENSION: int = 384
     EMBEDDING_DEVICE: str = "cpu"
+    CHROMA_PERSIST_DIRECTORY: str = str(PROJECT_ROOT / "storage" / "vector_db" / "chroma")
+    CHROMA_COLLECTION_NAME: str = "meeting_chunks"
     RAG_CHUNK_SIZE: int = 800
     RAG_CHUNK_OVERLAP: int = 150
     RAG_TOP_K: int = 5

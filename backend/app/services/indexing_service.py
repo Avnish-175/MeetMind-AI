@@ -8,9 +8,13 @@ from sqlalchemy.orm import Session
 from app.ai.embedding_service import EmbeddingServiceError, generate_embeddings
 from app.database.session import SessionLocal
 from app.models.meeting import Meeting
-from app.models.meeting_embedding import MeetingEmbedding
 from app.models.transcript import MeetingTranscript
 from app.services.chunking_service import ChunkingError, chunk_transcript
+from app.services.vector_store_service import (
+    VectorStoreError,
+    atomic_replace_meeting_embeddings,
+    get_meeting_chunk_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,15 +83,7 @@ def get_meeting_indexing_status(
             detail="Meeting not found.",
         )
 
-    chunk_count = (
-        db.execute(
-            select(func.count(MeetingEmbedding.id)).where(
-                MeetingEmbedding.meeting_id == meeting_id,
-                MeetingEmbedding.user_id == user_id,
-            )
-        ).scalar_one()
-        or 0
-    )
+    chunk_count = get_meeting_chunk_count(meeting_id=meeting_id, user_id=user_id)
 
     return {
         "meeting_id": meeting.id,
@@ -99,10 +95,9 @@ def get_meeting_indexing_status(
 
 
 def process_meeting_indexing_task(meeting_id: int) -> None:
-    """Background task that chunks the transcript, generates embeddings, and atomically updates pgvector.
+    """Background task that chunks the transcript, generates embeddings, and atomically updates ChromaDB.
 
-    Existing embeddings are only deleted inside the same transaction after new chunks
-    and embeddings have been validated and generated successfully.
+    Existing embeddings are retained if generation or validation fails, preventing partial or corrupt state.
     """
     db = SessionLocal()
     try:
@@ -134,30 +129,25 @@ def process_meeting_indexing_task(meeting_id: int) -> None:
                 f"Embedding count mismatch: expected {len(chunks)}, got {len(vectors)}."
             )
 
-        # Atomic replacement: delete old embeddings and insert new ones in one transaction
-        db.execute(
-            delete(MeetingEmbedding).where(
-                MeetingEmbedding.meeting_id == meeting.id,
-                MeetingEmbedding.user_id == meeting.user_id,
-            )
-        )
-
-        records = [
-            MeetingEmbedding(
-                meeting_id=meeting.id,
-                user_id=meeting.user_id,
-                content=chunk.content,
-                embedding=vector,
-                chunk_index=chunk.chunk_index,
-                chunk_metadata={
+        items = [
+            {
+                "content": chunk.content,
+                "embedding": vector,
+                "chunk_index": chunk.chunk_index,
+                "metadata": {
                     "start_time": chunk.start_time,
                     "end_time": chunk.end_time,
                     "segment_ids": chunk.segment_ids,
                 },
-            )
+            }
             for chunk, vector in zip(chunks, vectors)
         ]
-        db.add_all(records)
+
+        stored_ids = atomic_replace_meeting_embeddings(
+            meeting_id=meeting.id,
+            user_id=meeting.user_id,
+            items=items,
+        )
 
         meeting.embedding_status = "completed"
         meeting.embedding_error = None
@@ -165,8 +155,8 @@ def process_meeting_indexing_task(meeting_id: int) -> None:
         db.commit()
 
         logger.info(
-            "Successfully indexed %d chunks for meeting %d (user %d).",
-            len(records),
+            "Successfully indexed %d chunks for meeting %d (user %d) in ChromaDB.",
+            len(stored_ids),
             meeting.id,
             meeting.user_id,
         )
