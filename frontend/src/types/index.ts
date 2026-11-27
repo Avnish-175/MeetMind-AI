@@ -1,8 +1,22 @@
 export type {
+  ActionItem,
+  AnalysisStatus,
+  DeadlineItem,
+  DecisionItem,
+  ExtractedEntity,
+  ExtractedKeyword,
+  KeyPointItem,
+  LinguisticMetadata,
   Meeting,
+  MeetingAnalysis,
   MeetingListResponse,
   MeetingMediaType,
   MeetingProcessingStatus,
+  MeetingTranscript,
+  StartAnalysisResponse,
+  TraditionalNLPResult,
+  TranscriptSegment,
+  UnresolvedQuestionItem,
   UploadMeetingPayload,
 } from './meeting';
 

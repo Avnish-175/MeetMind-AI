@@ -86,6 +86,21 @@ export function formatDuration(seconds: number | null): string {
   return `${secs}s`;
 }
 
+export function formatTimestamp(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) {
+    return '--:--';
+  }
+  const totalSeconds = Math.floor(seconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  const paddedSecs = String(secs).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${paddedSecs}`;
+  }
+  return `${minutes}:${paddedSecs}`;
+}
+
 export function getStatusBadgeInfo(status: string): {
   label: string;
   className: string;
@@ -97,10 +112,20 @@ export function getStatusBadgeInfo(status: string): {
         label: 'Uploaded',
         className: 'bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200',
       };
+    case 'pending':
+      return {
+        label: 'Pending',
+        className: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200',
+      };
     case 'processing':
       return {
         label: 'Processing',
         className: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200',
+      };
+    case 'transcribed':
+      return {
+        label: 'Transcribed',
+        className: 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200',
       };
     case 'completed':
     case 'processed':

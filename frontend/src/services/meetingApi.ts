@@ -1,6 +1,13 @@
 import axios from 'axios';
 import api from './api';
-import type { Meeting, MeetingListResponse, UploadMeetingPayload } from '../types/meeting';
+import type {
+  Meeting,
+  MeetingAnalysis,
+  MeetingListResponse,
+  MeetingTranscript,
+  StartAnalysisResponse,
+  UploadMeetingPayload,
+} from '../types/meeting';
 
 export async function fetchMeetings(): Promise<MeetingListResponse> {
   const response = await api.get<MeetingListResponse>('/api/v1/meetings');
@@ -46,6 +53,58 @@ export async function uploadMeeting({
 
 export async function deleteMeeting(meetingId: number): Promise<void> {
   await api.delete(`/api/v1/meetings/${meetingId}`);
+}
+
+export async function fetchMeetingTranscript(
+  meetingId: number
+): Promise<MeetingTranscript | null> {
+  try {
+    const response = await api.get<MeetingTranscript>(
+      `/api/v1/meetings/${meetingId}/transcript`
+    );
+    return response.data;
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+export async function startMeetingTranscription(
+  meetingId: number
+): Promise<{ meeting_id: number; processing_status: string; message: string }> {
+  const response = await api.post<{
+    meeting_id: number;
+    processing_status: string;
+    message: string;
+  }>(`/api/v1/meetings/${meetingId}/transcribe`);
+  return response.data;
+}
+
+export async function fetchMeetingAnalysis(
+  meetingId: number
+): Promise<MeetingAnalysis | null> {
+  try {
+    const response = await api.get<MeetingAnalysis>(
+      `/api/v1/meetings/${meetingId}/analysis`
+    );
+    return response.data;
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+export async function startMeetingAnalysis(
+  meetingId: number
+): Promise<StartAnalysisResponse> {
+  const response = await api.post<StartAnalysisResponse>(
+    `/api/v1/meetings/${meetingId}/analyze`
+  );
+  return response.data;
 }
 
 export function isRequestCanceled(error: unknown): boolean {
