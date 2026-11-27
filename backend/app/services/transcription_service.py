@@ -14,6 +14,8 @@ _model_lock = threading.Lock()
 _cached_model: "WhisperModel | None" = None
 _cached_model_config: tuple[str, str, str, str | None] | None = None
 
+_inference_lock = threading.Lock()
+
 
 class TranscriptionError(Exception):
     """Raised when local Faster-Whisper transcription fails."""
@@ -86,25 +88,32 @@ def transcribe_audio(audio_path: Path) -> TranscriptionResult:
     model, model_name = _get_whisper_model()
 
     try:
-        raw_segments, info = model.transcribe(
-            str(audio_path),
-            beam_size=5,
-            vad_filter=True,
-        )
-
-        segments: list[dict[str, Any]] = []
-        for idx, segment in enumerate(raw_segments, start=1):
-            text = (segment.text or "").strip()
-            if not text:
-                continue
-            segments.append(
-                {
-                    "id": idx,
-                    "start": round(float(segment.start), 3),
-                    "end": round(float(segment.end), 3),
-                    "text": text,
-                }
+        with _inference_lock:
+            raw_segments, info = model.transcribe(
+                str(audio_path),
+                beam_size=5,
+                vad_filter=True,
             )
+
+            segments: list[dict[str, Any]] = []
+            for idx, segment in enumerate(raw_segments, start=1):
+                text = (segment.text or "").strip()
+                if not text:
+                    continue
+                segments.append(
+                    {
+                        "id": idx,
+                        "start": round(float(segment.start), 3),
+                        "end": round(float(segment.end), 3),
+                        "text": text,
+                    }
+                )
+
+            language = getattr(info, "language", None)
+            raw_prob = getattr(info, "language_probability", None)
+            language_probability = round(float(raw_prob), 4) if raw_prob is not None else None
+            raw_duration = getattr(info, "duration", None)
+            duration_seconds = round(float(raw_duration), 3) if raw_duration is not None else None
     except TranscriptionError:
         raise
     except Exception as exc:
@@ -117,12 +126,6 @@ def transcribe_audio(audio_path: Path) -> TranscriptionResult:
         raise TranscriptionError(
             "No transcribable speech was detected in the meeting audio."
         )
-
-    language = getattr(info, "language", None)
-    raw_prob = getattr(info, "language_probability", None)
-    language_probability = round(float(raw_prob), 4) if raw_prob is not None else None
-    raw_duration = getattr(info, "duration", None)
-    duration_seconds = round(float(raw_duration), 3) if raw_duration is not None else None
 
     return TranscriptionResult(
         full_text=full_text,

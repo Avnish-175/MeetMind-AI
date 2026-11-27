@@ -103,8 +103,21 @@ def delete_user_meeting(db: Session, meeting_id: int, user_id: int) -> None:
 
 
 def start_meeting_transcription(db: Session, meeting_id: int, user_id: int) -> Meeting:
-    """Validate ownership and state, then mark a meeting as processing."""
-    meeting = get_user_meeting(db, meeting_id, user_id)
+    """Validate ownership and state with a row lock, then mark a meeting as processing."""
+    stmt = (
+        select(Meeting)
+        .where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == user_id,
+        )
+        .with_for_update()
+    )
+    meeting = db.scalar(stmt)
+    if meeting is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found.",
+        )
 
     if meeting.processing_status == "processing":
         raise HTTPException(
