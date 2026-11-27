@@ -17,6 +17,7 @@ from app.models import (  # noqa: F401
     Conversation,
     Meeting,
     MeetingAnalysis,
+    MeetingEmbedding,
     MeetingTranscript,
     User,
 )
