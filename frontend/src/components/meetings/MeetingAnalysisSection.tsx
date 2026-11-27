@@ -556,16 +556,24 @@ export function MeetingAnalysisSection({
                         No keywords extracted.
                       </p>
                     ) : (
-                      <div className="mt-2.5 flex flex-wrap gap-1.5">
-                        {analysis.nlp_insights.keywords.map((kw, idx) => (
-                          <span
-                            key={idx}
-                            className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700"
-                          >
-                            <Tag className="h-3 w-3" />
-                            {kw.text}
-                          </span>
-                        ))}
+                      <div className="mt-2.5 flex flex-wrap gap-2">
+                        {analysis.nlp_insights.keywords.flatMap((kw, kwIdx) => {
+                          // Handle cases where a keyword entry may contain comma- or semicolon-separated tokens
+                          const tokens = kw.text
+                            .split(/[,;]+/)
+                            .map((t) => t.trim())
+                            .filter((t) => t.length > 0);
+                          const items = tokens.length > 0 ? tokens : [kw.text.trim()];
+                          return items.map((word, itemIdx) => (
+                            <span
+                              key={`${kwIdx}-${itemIdx}`}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200/80 bg-indigo-50/80 px-2.5 py-1 text-xs font-medium text-indigo-700 shadow-2xs transition-colors hover:bg-indigo-100/70"
+                            >
+                              <Tag className="h-3 w-3 shrink-0 text-indigo-500" />
+                              <span>{word}</span>
+                            </span>
+                          ));
+                        })}
                       </div>
                     )}
                   </div>

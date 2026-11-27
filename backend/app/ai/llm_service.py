@@ -145,11 +145,10 @@ async def generate_ollama_chat_completion(
         raise LLMServiceError(f"Failed to read Ollama response: {exc}") from exc
 
 
-def validate_analysis_evidence(
-    analysis_data: dict[str, Any],
+def _build_segment_bounds(
     segments: list[dict[str, Any]],
-) -> None:
-    """Verify every insight cites valid transcript_segment_ids with consistent boundaries."""
+) -> dict[int, tuple[float | None, float | None]]:
+    """Map each transcript segment ID to its (start, end) timestamp bounds."""
     segment_bounds: dict[int, tuple[float | None, float | None]] = {}
     for seg in segments:
         raw_id = seg.get("id")
@@ -159,6 +158,56 @@ def validate_analysis_evidence(
         start = float(seg["start"]) if seg.get("start") is not None else None
         end = float(seg["end"]) if seg.get("end") is not None else None
         segment_bounds[seg_id] = (start, end)
+    return segment_bounds
+
+
+def _derive_insight_timestamps(
+    item: dict[str, Any],
+    field_name: str,
+    segment_bounds: dict[int, tuple[float | None, float | None]],
+) -> dict[str, Any]:
+    """Validate cited segment IDs and deterministically derive start_time and end_time."""
+    raw_seg_ids = item.get("transcript_segment_ids")
+    if not isinstance(raw_seg_ids, list) or not raw_seg_ids:
+        raise OllamaOutputValidationError(
+            f"Insight in '{field_name}' must cite at least one transcript_segment_id."
+        )
+
+    validated_seg_ids: list[int] = []
+    for raw_sid in raw_seg_ids:
+        if isinstance(raw_sid, bool) or not isinstance(raw_sid, int):
+            raise OllamaOutputValidationError(
+                f"Insight in '{field_name}' contains invalid transcript_segment_id: {raw_sid!r}."
+            )
+        if raw_sid not in segment_bounds:
+            raise OllamaOutputValidationError(
+                f"Insight in '{field_name}' references nonexistent transcript segment ID {raw_sid}."
+            )
+        validated_seg_ids.append(raw_sid)
+
+    ref_starts = [
+        segment_bounds[sid][0]
+        for sid in validated_seg_ids
+        if segment_bounds[sid][0] is not None
+    ]
+    ref_ends = [
+        segment_bounds[sid][1]
+        for sid in validated_seg_ids
+        if segment_bounds[sid][1] is not None
+    ]
+
+    derived = dict(item)
+    derived["start_time"] = min(ref_starts) if ref_starts else None
+    derived["end_time"] = max(ref_ends) if ref_ends else None
+    return derived
+
+
+def validate_analysis_evidence(
+    analysis_data: dict[str, Any],
+    segments: list[dict[str, Any]],
+) -> None:
+    """Verify every insight cites valid transcript_segment_ids with consistent boundaries."""
+    segment_bounds = _build_segment_bounds(segments)
 
     for field_name, _ in INSIGHT_LIST_MODELS:
         for item in analysis_data.get(field_name, []):
@@ -233,6 +282,7 @@ def parse_and_validate_analysis_json(
         summary = None
 
     validated_result: dict[str, Any] = {"summary": summary}
+    segment_bounds = _build_segment_bounds(segments) if segments is not None else None
 
     for field_name, model_cls in INSIGHT_LIST_MODELS:
         raw_list = data[field_name]
@@ -246,8 +296,14 @@ def parse_and_validate_analysis_json(
                 raise OllamaOutputValidationError(
                     f"Item {idx} in '{field_name}' must be a JSON object."
                 )
+            normalized_item = _normalize_nullable_insight_fields(item)
+            if segment_bounds is not None:
+                normalized_item = _derive_insight_timestamps(
+                    normalized_item,
+                    field_name,
+                    segment_bounds,
+                )
             try:
-                normalized_item = _normalize_nullable_insight_fields(item)
                 validated_obj = model_cls.model_validate(normalized_item)
                 validated_items.append(validated_obj.model_dump())
             except ValidationError as exc:
