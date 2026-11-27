@@ -13,7 +13,13 @@ from app.schemas.meeting import (
     MeetingResponse,
     TranscriptionStartResponse,
 )
+from app.schemas.meeting_analysis import MeetingAnalysisResponse
 from app.schemas.transcript import MeetingTranscriptResponse
+from app.services.analysis_orchestrator import (
+    process_meeting_analysis_task,
+    start_meeting_analysis_job,
+)
+from app.services.meeting_analysis_service import get_meeting_analysis
 from app.services.meeting_service import (
     create_meeting,
     delete_user_meeting,
@@ -133,6 +139,53 @@ def get_meeting_transcript(
 ) -> MeetingTranscript:
     """Retrieve the transcript and timestamped segments for a meeting."""
     return get_user_meeting_transcript(
+        db=db,
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+    )
+
+
+@router.post(
+    "/{meeting_id}/analyze",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def analyze_meeting(
+    meeting_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Start background meeting intelligence and contextual analysis using local NLP and Ollama."""
+    analysis = start_meeting_analysis_job(
+        db=db,
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+    )
+    background_tasks.add_task(process_meeting_analysis_task, meeting_id)
+    logger.info(
+        "Enqueued background analysis task for meeting ID=%d (requested by user ID=%d)",
+        meeting_id,
+        current_user.id,
+    )
+    return {
+        "meeting_id": meeting_id,
+        "status": analysis.status,
+        "message": "Meeting analysis job started successfully.",
+    }
+
+
+@router.get(
+    "/{meeting_id}/analysis",
+    response_model=MeetingAnalysisResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_meeting_analysis_endpoint(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    """Retrieve structured meeting analysis, summaries, action items, and insights."""
+    return get_meeting_analysis(
         db=db,
         meeting_id=meeting_id,
         user_id=current_user.id,

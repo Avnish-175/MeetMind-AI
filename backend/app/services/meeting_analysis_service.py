@@ -24,6 +24,10 @@ def _validate_status_value(status_value: str) -> str:
     return normalized
 
 
+# ============================================================================
+# USER-FACING FUNCTIONS (MANDATORY user_id AND OWNERSHIP VALIDATION)
+# ============================================================================
+
 def get_meeting_analysis(
     db: Session,
     meeting_id: int,
@@ -116,7 +120,6 @@ def initialize_meeting_analysis(
             meeting_id,
             exc,
         )
-        # Attempt to recover safely under concurrency
         analysis = db.scalar(
             select(MeetingAnalysis).where(MeetingAnalysis.meeting_id == meeting.id)
         )
@@ -146,15 +149,81 @@ def initialize_meeting_analysis(
 def update_analysis_status(
     db: Session,
     meeting_id: int,
+    user_id: int,
     status_value: str,
     error_message: str | None = None,
-    user_id: int | None = None,
 ) -> MeetingAnalysis | None:
-    """Update status and optional error message for a meeting's analysis.
+    """User-facing update of status and optional error message for a meeting's analysis.
 
-    NOTE: If user_id is provided, meeting ownership is strictly verified. If user_id is
-    None, this function is strictly INTERNAL for trusted asynchronous background worker
-    tasks that operate on pre-authorized meeting IDs.
+    Validates meeting ownership via get_user_meeting() before modifying the record.
+    """
+    get_user_meeting(db, meeting_id, user_id)
+    return internal_update_analysis_status(
+        db=db,
+        meeting_id=meeting_id,
+        status_value=status_value,
+        error_message=error_message,
+    )
+
+
+def persist_analysis_results(
+    db: Session,
+    meeting_id: int,
+    user_id: int,
+    summary: str | None,
+    key_points: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    action_items: list[dict[str, Any]],
+    deadlines: list[dict[str, Any]],
+    unresolved_questions: list[dict[str, Any]],
+    analysis_provider: str | None = None,
+    model_name: str | None = None,
+) -> MeetingAnalysis:
+    """User-facing persistence of structured analysis insights with mandatory ownership check."""
+    get_user_meeting(db, meeting_id, user_id)
+    return internal_persist_analysis_results(
+        db=db,
+        meeting_id=meeting_id,
+        summary=summary,
+        key_points=key_points,
+        decisions=decisions,
+        action_items=action_items,
+        deadlines=deadlines,
+        unresolved_questions=unresolved_questions,
+        analysis_provider=analysis_provider,
+        model_name=model_name,
+    )
+
+
+def mark_analysis_failed(
+    db: Session,
+    meeting_id: int,
+    user_id: int,
+    error_message: str,
+) -> None:
+    """User-facing mark of analysis as failed with mandatory ownership check."""
+    get_user_meeting(db, meeting_id, user_id)
+    internal_mark_analysis_failed(
+        db=db,
+        meeting_id=meeting_id,
+        error_message=error_message,
+    )
+
+
+# ============================================================================
+# INTERNAL / BACKGROUND-TASK HELPER FUNCTIONS (TRUSTED PRE-AUTHORIZED WORKERS)
+# ============================================================================
+
+def internal_update_analysis_status(
+    db: Session,
+    meeting_id: int,
+    status_value: str,
+    error_message: str | None = None,
+) -> MeetingAnalysis | None:
+    """INTERNAL ONLY: Update status and optional error message for a meeting's analysis.
+
+    RESTRICTION: This function does NOT perform user ownership checks and MUST ONLY be called
+    by trusted asynchronous background workers with an isolated session on pre-validated IDs.
     """
     try:
         valid_status = _validate_status_value(status_value)
@@ -163,9 +232,6 @@ def update_analysis_status(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-
-    if user_id is not None:
-        get_user_meeting(db, meeting_id, user_id)
 
     analysis = db.scalar(
         select(MeetingAnalysis).where(MeetingAnalysis.meeting_id == meeting_id)
@@ -198,7 +264,7 @@ def update_analysis_status(
         ) from exc
 
 
-def persist_analysis_results(
+def internal_persist_analysis_results(
     db: Session,
     meeting_id: int,
     summary: str | None,
@@ -209,17 +275,12 @@ def persist_analysis_results(
     unresolved_questions: list[dict[str, Any]],
     analysis_provider: str | None = None,
     model_name: str | None = None,
-    user_id: int | None = None,
 ) -> MeetingAnalysis:
-    """Persist structured analysis insights and mark the record as completed.
+    """INTERNAL ONLY: Persist structured analysis insights and mark record as completed.
 
-    NOTE: If user_id is provided, meeting ownership is strictly verified. If user_id is
-    None, this function is strictly INTERNAL for trusted background worker tasks operating
-    on an authorized job execution cycle.
+    RESTRICTION: This function does NOT perform user ownership checks and MUST ONLY be called
+    by trusted asynchronous background workers with an isolated session on pre-validated IDs.
     """
-    if user_id is not None:
-        get_user_meeting(db, meeting_id, user_id)
-
     analysis = db.scalar(
         select(MeetingAnalysis).where(MeetingAnalysis.meeting_id == meeting_id)
     )
@@ -268,20 +329,16 @@ def persist_analysis_results(
         ) from exc
 
 
-def mark_analysis_failed(
+def internal_mark_analysis_failed(
     db: Session,
     meeting_id: int,
     error_message: str,
-    user_id: int | None = None,
 ) -> None:
-    """Mark an analysis record as failed with a safe, length-limited error message.
+    """INTERNAL ONLY: Mark an analysis record as failed with a safe, length-limited error message.
 
-    NOTE: If user_id is provided, meeting ownership is verified. If user_id is None,
-    this function is strictly INTERNAL for trusted background processing routines.
+    RESTRICTION: This function does NOT perform user ownership checks and MUST ONLY be called
+    by trusted asynchronous background workers with an isolated session on pre-validated IDs.
     """
-    if user_id is not None:
-        get_user_meeting(db, meeting_id, user_id)
-
     truncated_error = error_message[:MAX_ERROR_MESSAGE_LENGTH]
     try:
         analysis = db.scalar(
