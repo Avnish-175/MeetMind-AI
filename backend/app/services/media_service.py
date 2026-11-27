@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
+import logging
 from pathlib import Path
 import shutil
 import subprocess
@@ -7,6 +8,8 @@ import tempfile
 
 from app.core.config import PROJECT_ROOT, settings
 from app.services.storage_service import ALLOWED_MEDIA_FORMATS
+
+logger = logging.getLogger(__name__)
 
 FFMPEG_TIMEOUT_SECONDS = 600
 WAV_HEADER_MIN_BYTES = 44
@@ -83,6 +86,12 @@ def extract_normalized_audio(storage_path: str) -> Iterator[Path]:
             str(output_wav_path),
         ]
 
+        logger.info(
+            "Starting FFmpeg audio extraction for source '%s' to '%s'",
+            source_path.name,
+            output_wav_path.name,
+        )
+
         try:
             result = subprocess.run(
                 command,
@@ -92,21 +101,49 @@ def extract_normalized_audio(storage_path: str) -> Iterator[Path]:
                 timeout=FFMPEG_TIMEOUT_SECONDS,
                 check=False,
             )
+            logger.info(
+                "FFmpeg audio extraction completed for '%s' with return code %d",
+                source_path.name,
+                result.returncode,
+            )
         except FileNotFoundError as exc:
+            logger.error(
+                "FFmpeg audio extraction failed: executable not found at '%s'",
+                ffmpeg_executable,
+                exc_info=True,
+            )
             raise MediaProcessingError(
                 "FFmpeg executable was not found. Install FFmpeg and set FFMPEG_PATH."
             ) from exc
         except subprocess.TimeoutExpired as exc:
+            logger.error(
+                "FFmpeg audio extraction timed out after %d seconds for '%s'",
+                FFMPEG_TIMEOUT_SECONDS,
+                source_path.name,
+                exc_info=True,
+            )
             raise MediaProcessingError(
                 "Media audio extraction timed out while running FFmpeg."
             ) from exc
         except OSError as exc:
+            logger.error(
+                "FFmpeg audio extraction failed to execute for '%s': %s",
+                source_path.name,
+                exc,
+                exc_info=True,
+            )
             raise MediaProcessingError(
                 "Failed to execute FFmpeg for media audio extraction."
             ) from exc
 
         if result.returncode != 0:
             stderr_lower = (result.stderr or "").lower()
+            logger.error(
+                "FFmpeg audio extraction failed for '%s' (exit code %d). Stderr: %s",
+                source_path.name,
+                result.returncode,
+                (result.stderr or "").strip(),
+            )
             if "does not contain any stream" in stderr_lower or "no audio" in stderr_lower:
                 raise MediaProcessingError(
                     "The uploaded media file does not contain an audio stream."
@@ -116,6 +153,10 @@ def extract_normalized_audio(storage_path: str) -> Iterator[Path]:
             )
 
         if not output_wav_path.is_file() or output_wav_path.stat().st_size <= WAV_HEADER_MIN_BYTES:
+            logger.error(
+                "Extracted audio file '%s' is missing or smaller than WAV header minimum size",
+                output_wav_path.name,
+            )
             raise MediaProcessingError(
                 "Extracted audio output is empty or invalid."
             )

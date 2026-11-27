@@ -1,3 +1,4 @@
+import logging
 from fastapi import HTTPException, UploadFile, status
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -11,6 +12,8 @@ from app.schemas.meeting import MeetingCreateMetadata
 from app.services.media_service import MediaProcessingError, extract_normalized_audio
 from app.services.storage_service import delete_stored_file, save_upload_file
 from app.services.transcription_service import TranscriptionError, transcribe_audio
+
+logger = logging.getLogger(__name__)
 
 
 async def create_meeting(
@@ -162,14 +165,39 @@ def _mark_transcription_failed(db: Session, meeting_id: int, error_message: str)
 
 def process_meeting_transcription_task(meeting_id: int) -> None:
     """Background task that extracts audio, transcribes locally, and persists results."""
+    logger.info("Background transcription task started for meeting ID=%d", meeting_id)
     db = SessionLocal()
     try:
         meeting = db.scalar(select(Meeting).where(Meeting.id == meeting_id))
         if meeting is None:
+            logger.warning(
+                "Background transcription task: meeting ID=%d was not found in the database",
+                meeting_id,
+            )
             return
 
+        logger.info(
+            "Meeting record retrieved for meeting ID=%d (title='%s', storage_path='%s')",
+            meeting_id,
+            meeting.title,
+            meeting.storage_path,
+        )
+
+        logger.info("Starting audio extraction for meeting ID=%d", meeting_id)
         with extract_normalized_audio(meeting.storage_path) as wav_path:
+            logger.info(
+                "Audio extraction completed for meeting ID=%d (extracted wav='%s')",
+                meeting_id,
+                wav_path.name,
+            )
+            logger.info("Starting transcription for meeting ID=%d", meeting_id)
             result = transcribe_audio(wav_path)
+            logger.info(
+                "Transcription completed for meeting ID=%d (segments=%d, duration=%ss)",
+                meeting_id,
+                len(result.segments),
+                result.duration_seconds,
+            )
 
         transcript = db.scalar(
             select(MeetingTranscript).where(MeetingTranscript.meeting_id == meeting_id)
@@ -197,17 +225,39 @@ def process_meeting_transcription_task(meeting_id: int) -> None:
         meeting.processing_status = "transcribed"
         meeting.processing_error = None
         db.commit()
+        logger.info(
+            "Transcript saved successfully for meeting ID=%d (status set to 'transcribed')",
+            meeting_id,
+        )
     except (MediaProcessingError, TranscriptionError) as exc:
+        logger.error(
+            "Background transcription processing failed for meeting ID=%d: %s",
+            meeting_id,
+            exc,
+            exc_info=True,
+        )
         db.rollback()
         _mark_transcription_failed(db, meeting_id, str(exc))
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        logger.error(
+            "Database error during background transcription for meeting ID=%d: %s",
+            meeting_id,
+            exc,
+            exc_info=True,
+        )
         db.rollback()
         _mark_transcription_failed(
             db,
             meeting_id,
             "Failed to save transcription results to the database.",
         )
-    except Exception:
+    except Exception as exc:
+        logger.error(
+            "Unexpected error during background transcription for meeting ID=%d: %s",
+            meeting_id,
+            exc,
+            exc_info=True,
+        )
         db.rollback()
         _mark_transcription_failed(
             db,

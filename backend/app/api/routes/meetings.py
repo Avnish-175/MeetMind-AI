@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,7 @@ from app.services.meeting_service import (
 )
 
 router = APIRouter(prefix="/api/v1/meetings", tags=["Meetings"])
+logger = logging.getLogger(__name__)
 
 
 @router.post(
@@ -106,6 +109,11 @@ def transcribe_meeting(
         user_id=current_user.id,
     )
     background_tasks.add_task(process_meeting_transcription_task, meeting.id)
+    logger.info(
+        "Enqueued background transcription task for meeting ID=%d (requested by user ID=%d)",
+        meeting.id,
+        current_user.id,
+    )
     return TranscriptionStartResponse(
         meeting_id=meeting.id,
         processing_status=meeting.processing_status,
