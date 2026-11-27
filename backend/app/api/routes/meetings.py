@@ -1,16 +1,25 @@
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.auth import get_current_user
 from app.database.dependencies import get_db
 from app.models.meeting import Meeting
+from app.models.transcript import MeetingTranscript
 from app.models.user import User
-from app.schemas.meeting import MeetingListResponse, MeetingResponse
+from app.schemas.meeting import (
+    MeetingListResponse,
+    MeetingResponse,
+    TranscriptionStartResponse,
+)
+from app.schemas.transcript import MeetingTranscriptResponse
 from app.services.meeting_service import (
     create_meeting,
     delete_user_meeting,
     get_user_meeting,
+    get_user_meeting_transcript,
     list_user_meetings,
+    process_meeting_transcription_task,
+    start_meeting_transcription,
 )
 
 router = APIRouter(prefix="/api/v1/meetings", tags=["Meetings"])
@@ -77,3 +86,46 @@ def delete_meeting(
 ) -> None:
     """Delete a meeting and its associated media file."""
     delete_user_meeting(db=db, meeting_id=meeting_id, user_id=current_user.id)
+
+
+@router.post(
+    "/{meeting_id}/transcribe",
+    response_model=TranscriptionStartResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def transcribe_meeting(
+    meeting_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TranscriptionStartResponse:
+    """Start background audio extraction and local Whisper transcription for a meeting."""
+    meeting = start_meeting_transcription(
+        db=db,
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+    )
+    background_tasks.add_task(process_meeting_transcription_task, meeting.id)
+    return TranscriptionStartResponse(
+        meeting_id=meeting.id,
+        processing_status=meeting.processing_status,
+        message="Meeting transcription started.",
+    )
+
+
+@router.get(
+    "/{meeting_id}/transcript",
+    response_model=MeetingTranscriptResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_meeting_transcript(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MeetingTranscript:
+    """Retrieve the transcript and timestamped segments for a meeting."""
+    return get_user_meeting_transcript(
+        db=db,
+        meeting_id=meeting_id,
+        user_id=current_user.id,
+    )

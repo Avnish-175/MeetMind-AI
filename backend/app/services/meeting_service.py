@@ -4,9 +4,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.database.session import SessionLocal
 from app.models.meeting import Meeting
+from app.models.transcript import MeetingTranscript
 from app.schemas.meeting import MeetingCreateMetadata
+from app.services.media_service import MediaProcessingError, extract_normalized_audio
 from app.services.storage_service import delete_stored_file, save_upload_file
+from app.services.transcription_service import TranscriptionError, transcribe_audio
 
 
 async def create_meeting(
@@ -96,3 +100,124 @@ def delete_user_meeting(db: Session, meeting_id: int, user_id: int) -> None:
         ) from exc
 
     delete_stored_file(storage_path)
+
+
+def start_meeting_transcription(db: Session, meeting_id: int, user_id: int) -> Meeting:
+    """Validate ownership and state, then mark a meeting as processing."""
+    meeting = get_user_meeting(db, meeting_id, user_id)
+
+    if meeting.processing_status == "processing":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Transcription is already in progress for this meeting.",
+        )
+
+    if meeting.processing_status == "transcribed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This meeting has already been transcribed.",
+        )
+
+    meeting.processing_status = "processing"
+    meeting.processing_error = None
+
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update meeting processing status.",
+        ) from exc
+
+    db.refresh(meeting)
+    return meeting
+
+
+def _mark_transcription_failed(db: Session, meeting_id: int, error_message: str) -> None:
+    """Persist a failed processing status and safe error message in the background."""
+    try:
+        meeting = db.scalar(select(Meeting).where(Meeting.id == meeting_id))
+        if meeting is None:
+            return
+        meeting.processing_status = "failed"
+        meeting.processing_error = error_message[:2000]
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+
+
+def process_meeting_transcription_task(meeting_id: int) -> None:
+    """Background task that extracts audio, transcribes locally, and persists results."""
+    db = SessionLocal()
+    try:
+        meeting = db.scalar(select(Meeting).where(Meeting.id == meeting_id))
+        if meeting is None:
+            return
+
+        with extract_normalized_audio(meeting.storage_path) as wav_path:
+            result = transcribe_audio(wav_path)
+
+        transcript = db.scalar(
+            select(MeetingTranscript).where(MeetingTranscript.meeting_id == meeting_id)
+        )
+        if transcript is None:
+            transcript = MeetingTranscript(
+                meeting_id=meeting_id,
+                full_text=result.full_text,
+                language=result.language,
+                language_probability=result.language_probability,
+                duration_seconds=result.duration_seconds,
+                model_name=result.model_name,
+                segments=result.segments,
+            )
+            db.add(transcript)
+        else:
+            transcript.full_text = result.full_text
+            transcript.language = result.language
+            transcript.language_probability = result.language_probability
+            transcript.duration_seconds = result.duration_seconds
+            transcript.model_name = result.model_name
+            transcript.segments = result.segments
+
+        meeting.duration_seconds = result.duration_seconds
+        meeting.processing_status = "transcribed"
+        meeting.processing_error = None
+        db.commit()
+    except (MediaProcessingError, TranscriptionError) as exc:
+        db.rollback()
+        _mark_transcription_failed(db, meeting_id, str(exc))
+    except SQLAlchemyError:
+        db.rollback()
+        _mark_transcription_failed(
+            db,
+            meeting_id,
+            "Failed to save transcription results to the database.",
+        )
+    except Exception:
+        db.rollback()
+        _mark_transcription_failed(
+            db,
+            meeting_id,
+            "An unexpected error occurred during media transcription.",
+        )
+    finally:
+        db.close()
+
+
+def get_user_meeting_transcript(
+    db: Session,
+    meeting_id: int,
+    user_id: int,
+) -> MeetingTranscript:
+    """Retrieve the transcript for an authenticated user's meeting or raise 404."""
+    meeting = get_user_meeting(db, meeting_id, user_id)
+    transcript = db.scalar(
+        select(MeetingTranscript).where(MeetingTranscript.meeting_id == meeting.id)
+    )
+    if transcript is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transcript not found for this meeting.",
+        )
+    return transcript

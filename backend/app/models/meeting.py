@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.base import Base
 
 if TYPE_CHECKING:
+    from app.models.transcript import MeetingTranscript
     from app.models.user import User
 
 
@@ -34,6 +35,7 @@ class Meeting(Base):
         default="uploaded",
         nullable=False,
     )
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -47,3 +49,8 @@ class Meeting(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="meetings")
+    transcript: Mapped["MeetingTranscript | None"] = relationship(
+        back_populates="meeting",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

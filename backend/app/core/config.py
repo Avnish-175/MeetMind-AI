@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     UPLOAD_DIR: str = str(PROJECT_ROOT / "storage" / "uploads")
     MAX_UPLOAD_SIZE_MB: int = 200
+    FFMPEG_PATH: str = "ffmpeg"
+    WHISPER_MODEL_SIZE: str = "small"
+    WHISPER_DEVICE: str = "cpu"
+    WHISPER_COMPUTE_TYPE: str = "int8"
+    WHISPER_DOWNLOAD_ROOT: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=(str(BACKEND_DIR / ".env"), ".env"),

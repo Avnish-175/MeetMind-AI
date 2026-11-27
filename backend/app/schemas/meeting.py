@@ -42,6 +42,7 @@ class MeetingResponse(BaseModel):
     file_size_bytes: int
     duration_seconds: float | None
     processing_status: str
+    processing_error: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -51,3 +52,11 @@ class MeetingListResponse(BaseModel):
 
     items: list[MeetingResponse]
     total: int
+
+
+class TranscriptionStartResponse(BaseModel):
+    """Response returned when a meeting transcription job is accepted."""
+
+    meeting_id: int
+    processing_status: str
+    message: str
