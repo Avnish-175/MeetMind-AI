@@ -20,12 +20,16 @@ def start_meeting_indexing_job(
     meeting_id: int,
     user_id: int,
 ) -> Meeting:
-    """Validate ownership and transcript availability, then mark the meeting as pending indexing."""
-    meeting = (
-        db.query(Meeting)
-        .filter(Meeting.id == meeting_id, Meeting.user_id == user_id)
-        .first()
+    """Validate ownership and transcript availability under a row lock, then mark the meeting as pending indexing."""
+    stmt = (
+        select(Meeting)
+        .where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == user_id,
+        )
+        .with_for_update()
     )
+    meeting = db.scalar(stmt)
     if meeting is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
