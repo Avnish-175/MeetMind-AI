@@ -34,6 +34,23 @@ INSIGHT_LIST_MODELS: tuple[tuple[str, Any], ...] = (
     ("deadlines", DeadlineItem),
     ("unresolved_questions", UnresolvedQuestionItem),
 )
+NULLABLE_INSIGHT_FIELDS: tuple[str, ...] = (
+    "priority",
+    "due_date",
+    "responsible_person",
+    "rationale",
+    "raised_by",
+)
+
+
+def _normalize_nullable_insight_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of an insight dict with string 'null' normalized to None on nullable fields."""
+    normalized = dict(item)
+    for field in NULLABLE_INSIGHT_FIELDS:
+        if field in normalized and isinstance(normalized[field], str):
+            if normalized[field].strip().lower() == "null":
+                normalized[field] = None
+    return normalized
 
 
 class LLMServiceError(Exception):
@@ -209,7 +226,11 @@ def parse_and_validate_analysis_json(
     raw_summary = data["summary"]
     if raw_summary is not None and not isinstance(raw_summary, str):
         raise OllamaOutputValidationError("LLM 'summary' field must be a string or null.")
-    summary = raw_summary.strip() or None if isinstance(raw_summary, str) else None
+    if isinstance(raw_summary, str):
+        stripped_summary = raw_summary.strip()
+        summary = None if not stripped_summary or stripped_summary.lower() == "null" else stripped_summary
+    else:
+        summary = None
 
     validated_result: dict[str, Any] = {"summary": summary}
 
@@ -226,7 +247,8 @@ def parse_and_validate_analysis_json(
                     f"Item {idx} in '{field_name}' must be a JSON object."
                 )
             try:
-                validated_obj = model_cls.model_validate(item)
+                normalized_item = _normalize_nullable_insight_fields(item)
+                validated_obj = model_cls.model_validate(normalized_item)
                 validated_items.append(validated_obj.model_dump())
             except ValidationError as exc:
                 raise OllamaOutputValidationError(

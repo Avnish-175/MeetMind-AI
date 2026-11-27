@@ -61,7 +61,9 @@ def build_meeting_analysis_prompt(
         "you MUST cite the exact integer transcript segment IDs from which the evidence was derived in "
         "`transcript_segment_ids`. Also include start_time and end_time (in seconds) matching those segments.\n"
         "8. Output MUST strictly be valid JSON conforming exactly to the requested schema, with no markdown code blocks, "
-        "no conversational introductory text, and no trailing comments."
+        "no conversational introductory text, and no trailing comments.\n"
+        "9. For any optional or unspecified field (such as priority, due_date, responsible_person, rationale, or raised_by), "
+        "use the JSON null literal (null), NEVER the string \"null\"."
     )
 
     formatted_segments: list[str] = []
