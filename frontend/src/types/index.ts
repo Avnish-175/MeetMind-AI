@@ -20,6 +20,16 @@ export type {
   UploadMeetingPayload,
 } from './meeting';
 
+export type {
+  ChatMessage,
+  Conversation,
+  ConversationDetail,
+  ConversationListResponse,
+  CreateConversationPayload,
+  SendMessagePayload,
+  UpdateConversationPayload,
+} from './chat';
+
 export interface MeetingSummary {
   id: string;
   title: string;

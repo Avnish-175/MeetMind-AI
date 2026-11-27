@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.chat import router as chat_router
 from app.api.routes.meetings import router as meetings_router
 from app.core.config import settings
 from app.database.dependencies import get_db
@@ -31,6 +32,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(meetings_router)
+app.include_router(chat_router)
 
 
 @app.get("/", tags=["Status"])

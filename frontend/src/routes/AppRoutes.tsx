@@ -15,6 +15,7 @@ import { RegisterPage } from '../pages/auth/RegisterPage';
 import { DashboardPage } from '../pages/dashboard/DashboardPage';
 import { MeetingsPage } from '../pages/meetings/MeetingsPage';
 import { MeetingDetailPage } from '../pages/meetings/MeetingDetailPage';
+import { ChatPage } from '../pages/chat/ChatPage';
 
 export function AppRoutes() {
   return (
@@ -29,16 +30,7 @@ export function AppRoutes() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/meetings" element={<MeetingsPage />} />
         <Route path="/meetings/:meetingId" element={<MeetingDetailPage />} />
-        <Route
-          path="/chat"
-          element={
-            <PlaceholderPage
-              title="AI Assistant"
-              description="Ask questions across your local meeting history, transcripts, and action items."
-              icon={Bot}
-            />
-          }
-        />
+        <Route path="/chat" element={<ChatPage />} />
         <Route
           path="/calendar"
           element={

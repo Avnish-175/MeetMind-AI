@@ -145,6 +145,83 @@ async def generate_ollama_chat_completion(
         raise LLMServiceError(f"Failed to read Ollama response: {exc}") from exc
 
 
+async def generate_chat_response(
+    messages: list[dict[str, str]],
+    system_prompt: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    timeout_seconds: float = DEFAULT_OLLAMA_TIMEOUT,
+) -> str:
+    """Send an asynchronous conversational chat request to the local Ollama instance."""
+    resolved_model = (model or settings.OLLAMA_MODEL).strip()
+    resolved_base_url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
+
+    endpoint = f"{resolved_base_url}/api/chat"
+
+    formatted_messages: list[dict[str, str]] = []
+    if system_prompt:
+        formatted_messages.append({"role": "system", "content": system_prompt})
+
+    for msg in messages:
+        formatted_messages.append(
+            {
+                "role": str(msg.get("role", "user")),
+                "content": str(msg.get("content", "")),
+            }
+        )
+
+    payload = {
+        "model": resolved_model,
+        "messages": formatted_messages,
+        "stream": False,
+        "options": {
+            "temperature": 0.7,
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            logger.info(
+                "Calling local Ollama chat endpoint '%s' with model '%s' (%d messages)...",
+                endpoint,
+                resolved_model,
+                len(formatted_messages),
+            )
+            response = await client.post(endpoint, json=payload)
+    except httpx.ConnectError as exc:
+        logger.error("Could not connect to Ollama at '%s': %s", endpoint, exc)
+        raise OllamaConnectionError(
+            f"Could not connect to local Ollama service at {resolved_base_url}. Ensure Ollama is running."
+        ) from exc
+    except httpx.TimeoutException as exc:
+        logger.error("Ollama inference timed out after %ds at '%s'", timeout_seconds, endpoint)
+        raise LLMServiceError(f"Ollama inference timed out after {timeout_seconds} seconds.") from exc
+    except httpx.HTTPError as exc:
+        logger.error("HTTP error during Ollama request: %s", exc)
+        raise LLMServiceError("Failed to communicate with local Ollama service.") from exc
+
+    if response.status_code == 404:
+        raise OllamaModelNotFoundError(
+            f"Ollama model '{resolved_model}' was not found. Please pull the model using 'ollama pull {resolved_model}'."
+        )
+    if response.status_code != 200:
+        raise LLMServiceError(
+            f"Ollama returned error status code {response.status_code}: {response.text[:200]}"
+        )
+
+    try:
+        response_data = response.json()
+        message = response_data.get("message", {})
+        content = message.get("content", "")
+        if not content:
+            raise LLMServiceError("Ollama returned an empty response content.")
+        return content
+    except LLMServiceError:
+        raise
+    except Exception as exc:
+        raise LLMServiceError(f"Failed to read Ollama response: {exc}") from exc
+
+
 def _build_segment_bounds(
     segments: list[dict[str, Any]],
 ) -> dict[int, tuple[float | None, float | None]]:

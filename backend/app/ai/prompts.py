@@ -4,6 +4,12 @@ from typing import Any
 from app.schemas.nlp import TraditionalNLPResult
 
 
+DEFAULT_CHAT_SYSTEM_PROMPT = (
+    "You are MeetMind AI, a helpful, intelligent, and concise meeting and productivity assistant. "
+    "Provide clear, accurate, and structured answers to the user's queries using Markdown when appropriate."
+)
+
+
 def chunk_transcript_segments(
     segments: list[dict[str, Any]],
     max_segments: int = 80,
