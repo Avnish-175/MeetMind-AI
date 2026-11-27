@@ -7,6 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.base import Base
 
 if TYPE_CHECKING:
+    from app.models.meeting_analysis import MeetingAnalysis
     from app.models.transcript import MeetingTranscript
     from app.models.user import User
 
@@ -50,6 +51,11 @@ class Meeting(Base):
 
     user: Mapped["User"] = relationship(back_populates="meetings")
     transcript: Mapped["MeetingTranscript | None"] = relationship(
+        back_populates="meeting",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    analysis: Mapped["MeetingAnalysis | None"] = relationship(
         back_populates="meeting",
         uselist=False,
         cascade="all, delete-orphan",
