@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -31,6 +32,43 @@ from app.services.meeting_analysis_service import (
 logger = logging.getLogger(__name__)
 
 
+def _extract_usable_segments(raw_segments: Any) -> list[dict[str, Any]]:
+    """Return validated timestamped transcript segments suitable for NLP and LLM evidence."""
+    if not isinstance(raw_segments, list):
+        return []
+
+    usable: list[dict[str, Any]] = []
+    for seg in raw_segments:
+        if not isinstance(seg, dict):
+            continue
+        raw_id = seg.get("id")
+        if raw_id is None or isinstance(raw_id, bool):
+            continue
+        try:
+            int(raw_id)
+        except (TypeError, ValueError):
+            continue
+
+        text = str(seg.get("text", "")).strip()
+        if not text:
+            continue
+
+        raw_start = seg.get("start")
+        raw_end = seg.get("end")
+        if raw_start is None or raw_end is None or isinstance(raw_start, bool) or isinstance(raw_end, bool):
+            continue
+        try:
+            start = float(raw_start)
+            end = float(raw_end)
+        except (TypeError, ValueError):
+            continue
+        if start < 0 or end < start:
+            continue
+
+        usable.append(seg)
+    return usable
+
+
 def start_meeting_analysis_job(
     db: Session,
     meeting_id: int,
@@ -55,6 +93,12 @@ def start_meeting_analysis_job(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot analyze meeting: transcript is not available or is empty.",
+        )
+
+    if not _extract_usable_segments(transcript.segments):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot analyze meeting: valid timestamped transcript segments are required.",
         )
 
     analysis = db.scalar(
@@ -140,7 +184,14 @@ async def _async_run_analysis_pipeline(meeting_id: int) -> None:
             )
             return
 
-        segments = transcript.segments or []
+        segments = _extract_usable_segments(transcript.segments)
+        if not segments:
+            internal_mark_analysis_failed(
+                db,
+                meeting_id,
+                "Transcript does not contain valid timestamped segments.",
+            )
+            return
 
         logger.info("Starting traditional NLP extraction for meeting ID=%d...", meeting_id)
         nlp_result = process_meeting_transcript_nlp(
@@ -154,7 +205,14 @@ async def _async_run_analysis_pipeline(meeting_id: int) -> None:
             len(nlp_result.keywords),
         )
 
-        chunks = chunk_transcript_segments(segments) if segments else [[]]
+        chunks = chunk_transcript_segments(segments)
+        if not chunks:
+            internal_mark_analysis_failed(
+                db,
+                meeting_id,
+                "Transcript does not contain usable segments for analysis.",
+            )
+            return
         total_chunks = len(chunks)
 
         merged_key_points = []

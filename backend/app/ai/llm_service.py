@@ -132,7 +132,7 @@ def validate_analysis_evidence(
     analysis_data: dict[str, Any],
     segments: list[dict[str, Any]],
 ) -> None:
-    """Verify all cited transcript_segment_ids exist and timestamps match referenced segments."""
+    """Verify every insight cites valid transcript_segment_ids with consistent boundaries."""
     segment_bounds: dict[int, tuple[float | None, float | None]] = {}
     for seg in segments:
         raw_id = seg.get("id")
@@ -146,6 +146,11 @@ def validate_analysis_evidence(
     for field_name, _ in INSIGHT_LIST_MODELS:
         for item in analysis_data.get(field_name, []):
             seg_ids: list[int] = item.get("transcript_segment_ids", [])
+            if not seg_ids:
+                raise OllamaOutputValidationError(
+                    f"Insight in '{field_name}' must cite at least one transcript_segment_id."
+                )
+
             for seg_id in seg_ids:
                 if seg_id not in segment_bounds:
                     raise OllamaOutputValidationError(
@@ -154,27 +159,29 @@ def validate_analysis_evidence(
 
             start_time = item.get("start_time")
             end_time = item.get("end_time")
-            if seg_ids and (start_time is not None or end_time is not None):
-                ref_starts = [
-                    segment_bounds[sid][0]
+            if start_time is not None or end_time is not None:
+                cited_with_bounds = [
+                    segment_bounds[sid]
                     for sid in seg_ids
-                    if segment_bounds[sid][0] is not None
+                    if segment_bounds[sid][0] is not None and segment_bounds[sid][1] is not None
                 ]
-                ref_ends = [
-                    segment_bounds[sid][1]
-                    for sid in seg_ids
-                    if segment_bounds[sid][1] is not None
-                ]
-                if ref_starts and ref_ends:
-                    min_start = min(ref_starts) - TIMESTAMP_TOLERANCE_SECONDS
-                    max_end = max(ref_ends) + TIMESTAMP_TOLERANCE_SECONDS
-                    if start_time is not None and (start_time < min_start or start_time > max_end):
+                if cited_with_bounds:
+                    earliest_start, earliest_end = min(cited_with_bounds, key=lambda b: b[0])  # type: ignore[arg-type]
+                    latest_start, latest_end = max(cited_with_bounds, key=lambda b: b[1])  # type: ignore[arg-type]
+
+                    if start_time is not None and (
+                        start_time < earliest_start - TIMESTAMP_TOLERANCE_SECONDS  # type: ignore[operator]
+                        or start_time > earliest_end + TIMESTAMP_TOLERANCE_SECONDS  # type: ignore[operator]
+                    ):
                         raise OllamaOutputValidationError(
-                            f"Insight start_time {start_time}s in '{field_name}' is inconsistent with referenced segments {seg_ids}."
+                            f"Insight start_time {start_time}s in '{field_name}' does not align with earliest cited segment boundary [{earliest_start}s, {earliest_end}s]."
                         )
-                    if end_time is not None and (end_time < min_start or end_time > max_end):
+                    if end_time is not None and (
+                        end_time < latest_start - TIMESTAMP_TOLERANCE_SECONDS  # type: ignore[operator]
+                        or end_time > latest_end + TIMESTAMP_TOLERANCE_SECONDS  # type: ignore[operator]
+                    ):
                         raise OllamaOutputValidationError(
-                            f"Insight end_time {end_time}s in '{field_name}' is inconsistent with referenced segments {seg_ids}."
+                            f"Insight end_time {end_time}s in '{field_name}' does not align with latest cited segment boundary [{latest_start}s, {latest_end}s]."
                         )
 
 
