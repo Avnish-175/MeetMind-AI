@@ -53,6 +53,10 @@ class MeetingAnalysis(Base):
         nullable=False,
         default=list,
     )
+    nlp_insights: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     analysis_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)

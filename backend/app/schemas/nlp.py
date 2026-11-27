@@ -38,6 +38,9 @@ class LinguisticMetadata(BaseModel):
     unique_lemmas: int
     entity_counts_by_type: dict[str, int] = Field(default_factory=dict)
     topic_keywords: list[str] = Field(default_factory=list)
+    nlp_pipeline: str = "spacy:en_core_web_sm"
+    capabilities: list[str] = Field(default_factory=list)
+    warning: str | None = None
 
 
 class TraditionalNLPResult(BaseModel):

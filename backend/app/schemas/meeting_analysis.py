@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.nlp import TraditionalNLPResult
+
 AnalysisStatus = Literal["pending", "processing", "completed", "failed"]
 
 
@@ -88,6 +90,7 @@ class MeetingAnalysisResponse(BaseModel):
     action_items: list[ActionItem] = Field(default_factory=list)
     deadlines: list[DeadlineItem] = Field(default_factory=list)
     unresolved_questions: list[UnresolvedQuestionItem] = Field(default_factory=list)
+    nlp_insights: TraditionalNLPResult | None = None
     error_message: str | None = None
     analysis_provider: str | None = None
     model_name: str | None = None

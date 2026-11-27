@@ -93,6 +93,7 @@ def initialize_meeting_analysis(
             action_items=[],
             deadlines=[],
             unresolved_questions=[],
+            nlp_insights=None,
             error_message=None,
             analysis_provider=None,
             model_name=None,
@@ -107,6 +108,7 @@ def initialize_meeting_analysis(
         analysis.action_items = []
         analysis.deadlines = []
         analysis.unresolved_questions = []
+        analysis.nlp_insights = None
         analysis.error_message = None
         analysis.analysis_provider = None
         analysis.model_name = None
@@ -176,6 +178,7 @@ def persist_analysis_results(
     action_items: list[dict[str, Any]],
     deadlines: list[dict[str, Any]],
     unresolved_questions: list[dict[str, Any]],
+    nlp_insights: dict[str, Any] | None = None,
     analysis_provider: str | None = None,
     model_name: str | None = None,
 ) -> MeetingAnalysis:
@@ -190,6 +193,7 @@ def persist_analysis_results(
         action_items=action_items,
         deadlines=deadlines,
         unresolved_questions=unresolved_questions,
+        nlp_insights=nlp_insights,
         analysis_provider=analysis_provider,
         model_name=model_name,
     )
@@ -273,6 +277,7 @@ def internal_persist_analysis_results(
     action_items: list[dict[str, Any]],
     deadlines: list[dict[str, Any]],
     unresolved_questions: list[dict[str, Any]],
+    nlp_insights: dict[str, Any] | None = None,
     analysis_provider: str | None = None,
     model_name: str | None = None,
 ) -> MeetingAnalysis:
@@ -294,6 +299,7 @@ def internal_persist_analysis_results(
             action_items=action_items,
             deadlines=deadlines,
             unresolved_questions=unresolved_questions,
+            nlp_insights=nlp_insights,
             analysis_provider=analysis_provider,
             model_name=model_name,
             error_message=None,
@@ -307,6 +313,7 @@ def internal_persist_analysis_results(
         analysis.action_items = action_items
         analysis.deadlines = deadlines
         analysis.unresolved_questions = unresolved_questions
+        analysis.nlp_insights = nlp_insights
         analysis.analysis_provider = analysis_provider
         analysis.model_name = model_name
         analysis.error_message = None

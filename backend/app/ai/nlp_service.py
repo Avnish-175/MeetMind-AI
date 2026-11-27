@@ -16,15 +16,33 @@ logger = logging.getLogger(__name__)
 
 _nlp_lock = threading.Lock()
 _cached_spacy_nlp: Any = None
+_cached_is_fallback: bool = False
+_cached_warning: str | None = None
 SPACY_MODEL_NAME = "en_core_web_sm"
 
+FULL_MODEL_CAPABILITIES = [
+    "sentencizer",
+    "tokenization",
+    "lemmatization",
+    "pos_tagging",
+    "ner",
+    "noun_chunks",
+]
+FALLBACK_CAPABILITIES = [
+    "sentencizer",
+    "tokenization",
+]
 
-def _get_spacy_model() -> Any:
-    """Lazily load and cache the English spaCy language model."""
-    global _cached_spacy_nlp
+
+def _get_spacy_model() -> tuple[Any, bool, str | None]:
+    """Lazily load and cache the English spaCy language model.
+
+    Returns (nlp_pipeline, is_fallback, warning_message).
+    """
+    global _cached_spacy_nlp, _cached_is_fallback, _cached_warning
     with _nlp_lock:
         if _cached_spacy_nlp is not None:
-            return _cached_spacy_nlp
+            return _cached_spacy_nlp, _cached_is_fallback, _cached_warning
 
         try:
             import spacy
@@ -35,24 +53,29 @@ def _get_spacy_model() -> Any:
         try:
             logger.info("Loading spaCy model '%s'...", SPACY_MODEL_NAME)
             _cached_spacy_nlp = spacy.load(SPACY_MODEL_NAME)
+            _cached_is_fallback = False
+            _cached_warning = None
             logger.info("spaCy model '%s' loaded successfully.", SPACY_MODEL_NAME)
         except Exception:
-            # Fallback to blank English model if the small pipeline package is not downloaded
-            logger.warning(
-                "spaCy model '%s' not found. Falling back to blank 'en' with sentencizer.",
-                SPACY_MODEL_NAME,
+            warning_msg = (
+                f"spaCy model '{SPACY_MODEL_NAME}' is not installed; using blank English "
+                "fallback. Named entity recognition, POS tagging, noun chunks, and "
+                "lemmatization are disabled."
             )
+            logger.warning(warning_msg)
             try:
                 nlp_fallback = spacy.blank("en")
                 if "sentencizer" not in nlp_fallback.pipe_names:
                     nlp_fallback.add_pipe("sentencizer")
                 _cached_spacy_nlp = nlp_fallback
+                _cached_is_fallback = True
+                _cached_warning = warning_msg
             except Exception as inner_exc:
                 raise RuntimeError(
                     f"Failed to initialize any spaCy English pipeline: {inner_exc}"
                 ) from inner_exc
 
-        return _cached_spacy_nlp
+        return _cached_spacy_nlp, _cached_is_fallback, _cached_warning
 
 
 def _extract_tfidf_keywords(
@@ -60,26 +83,29 @@ def _extract_tfidf_keywords(
     top_n: int = 15,
 ) -> list[tuple[str, float]]:
     """Extract top keywords across transcript segments using Scikit-learn TF-IDF."""
-    if not segment_texts or all(not text.strip() for text in segment_texts):
+    non_empty_texts = [text.strip() for text in segment_texts if text.strip()]
+    if not non_empty_texts:
         return []
 
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer
     except ImportError:
         logger.warning("scikit-learn is not available; falling back to frequency-based keywords.")
-        words = re.findall(r"\b[a-zA-Z]{3,}\b", " ".join(segment_texts).lower())
+        words = re.findall(r"\b[a-zA-Z]{3,}\b", " ".join(non_empty_texts).lower())
         common = Counter(words).most_common(top_n)
         return [(word, float(count)) for word, count in common]
 
     try:
+        # When there is only 1 segment, max_df=0.95 would evaluate to 0 documents and raise ValueError.
+        max_df = 1.0 if len(non_empty_texts) == 1 else 0.95
         vectorizer = TfidfVectorizer(
             stop_words="english",
-            max_df=0.95,
+            max_df=max_df,
             min_df=1,
             ngram_range=(1, 2),
             token_pattern=r"(?u)\b[a-zA-Z]{3,}\b",
         )
-        matrix = vectorizer.fit_transform(segment_texts)
+        matrix = vectorizer.fit_transform(non_empty_texts)
         feature_names = vectorizer.get_feature_names_out()
         scores = matrix.sum(axis=0).A1
         ranked_indices = scores.argsort()[::-1][:top_n]
@@ -94,6 +120,10 @@ def process_meeting_transcript_nlp(
     segments: list[dict[str, Any]],
 ) -> TraditionalNLPResult:
     """Run traditional NLP on transcript segments preserving timestamps and segment associations."""
+    nlp, is_fallback, warning_msg = _get_spacy_model()
+    pipeline_name = "spacy:blank_en_fallback" if is_fallback else f"spacy:{SPACY_MODEL_NAME}"
+    capabilities = list(FALLBACK_CAPABILITIES if is_fallback else FULL_MODEL_CAPABILITIES)
+
     if not full_text or not full_text.strip():
         return TraditionalNLPResult(
             keywords=[],
@@ -106,12 +136,12 @@ def process_meeting_transcript_nlp(
                 unique_lemmas=0,
                 entity_counts_by_type={},
                 topic_keywords=[],
+                nlp_pipeline=pipeline_name,
+                capabilities=capabilities,
+                warning=warning_msg,
             ),
         )
 
-    nlp = _get_spacy_model()
-
-    # 1. Process each segment individually to preserve segment IDs and timestamps
     sentences: list[SentenceInsight] = []
     entities_map: dict[tuple[str, str], dict[str, Any]] = {}
     key_phrases_counter: Counter[str] = Counter()
@@ -132,11 +162,11 @@ def process_meeting_transcript_nlp(
         doc = nlp(seg_text)
 
         total_tokens += len(doc)
-        for token in doc:
-            if not token.is_punct and not token.is_space and not token.is_stop:
-                all_lemmas.add(token.lemma_.lower())
+        if doc.has_annotation("LEMMA"):
+            for token in doc:
+                if not token.is_punct and not token.is_space and not token.is_stop:
+                    all_lemmas.add(token.lemma_.lower())
 
-        # Sentence segmentation
         for sent in doc.sents:
             sent_str = sent.text.strip()
             if sent_str:
@@ -149,7 +179,6 @@ def process_meeting_transcript_nlp(
                     )
                 )
 
-        # Named Entity Recognition (if pipeline has NER)
         if doc.has_annotation("ENT_IOB"):
             for ent in doc.ents:
                 ent_clean = ent.text.strip()
@@ -164,22 +193,18 @@ def process_meeting_transcript_nlp(
                             "end_time": end_t,
                         }
                     entities_map[key]["segments"].add(seg_id)
-                    # Extend end time if entity appears across segments
                     if end_t is not None:
                         entities_map[key]["end_time"] = end_t
 
-        # Noun chunks / key phrases (if pipeline has parser)
         if doc.has_annotation("DEP"):
             for chunk in doc.noun_chunks:
                 chunk_str = chunk.text.strip().lower()
                 if len(chunk_str.split()) > 1 and len(chunk_str) > 4:
                     key_phrases_counter[chunk_str] += 1
 
-    # 2. Extract TF-IDF keywords across segments
     tfidf_results = _extract_tfidf_keywords(segment_texts, top_n=15)
     keywords: list[ExtractedKeyword] = []
     for kw_text, score in tfidf_results:
-        # Match back to supporting segments
         matching_seg_ids = [
             int(s.get("id", 0))
             for s in segments
@@ -193,7 +218,6 @@ def process_meeting_transcript_nlp(
             )
         )
 
-    # 3. Format recognized entities
     extracted_entities: list[ExtractedEntity] = []
     entity_counts: dict[str, int] = {}
     for (ent_text, ent_label), data in entities_map.items():
@@ -208,7 +232,6 @@ def process_meeting_transcript_nlp(
         )
         entity_counts[ent_label] = entity_counts.get(ent_label, 0) + 1
 
-    # Top key phrases
     top_key_phrases = [phrase for phrase, _ in key_phrases_counter.most_common(12)]
     topic_keywords = [kw.text for kw in keywords[:6]]
 
@@ -218,6 +241,9 @@ def process_meeting_transcript_nlp(
         unique_lemmas=len(all_lemmas),
         entity_counts_by_type=entity_counts,
         topic_keywords=topic_keywords,
+        nlp_pipeline=pipeline_name,
+        capabilities=capabilities,
+        warning=warning_msg,
     )
 
     return TraditionalNLPResult(

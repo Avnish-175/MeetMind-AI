@@ -4,11 +4,44 @@ from typing import Any
 from app.schemas.nlp import TraditionalNLPResult
 
 
+def chunk_transcript_segments(
+    segments: list[dict[str, Any]],
+    max_segments: int = 80,
+    max_chars: int = 12000,
+) -> list[list[dict[str, Any]]]:
+    """Split transcript segments into bounded chunks without dropping any segments."""
+    if not segments:
+        return []
+
+    chunks: list[list[dict[str, Any]]] = []
+    current_chunk: list[dict[str, Any]] = []
+    current_chars = 0
+
+    for seg in segments:
+        seg_text = str(seg.get("text", "")).strip()
+        line_len = len(seg_text) + 32
+        if current_chunk and (
+            len(current_chunk) >= max_segments or current_chars + line_len > max_chars
+        ):
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_chars = 0
+        current_chunk.append(seg)
+        current_chars += line_len
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
 def build_meeting_analysis_prompt(
     meeting_title: str,
     full_text: str,
     segments: list[dict[str, Any]],
     nlp_result: TraditionalNLPResult,
+    chunk_index: int = 1,
+    total_chunks: int = 1,
 ) -> tuple[str, str]:
     """Construct safe system and user prompts treating the transcript as untrusted data."""
     system_prompt = (
@@ -31,16 +64,14 @@ def build_meeting_analysis_prompt(
         "no conversational introductory text, and no trailing comments."
     )
 
-    # Prepare formatted segments evidence block (limit segment text display length safely)
     formatted_segments: list[str] = []
-    for s in segments[:150]:  # Protect prompt context size
+    for s in segments:
         seg_id = s.get("id")
         start = s.get("start")
         end = s.get("end")
         text = str(s.get("text", "")).strip()
         formatted_segments.append(f"[{seg_id}] ({start}s - {end}s): {text}")
 
-    # Helpful entity & keyword cues derived from traditional NLP
     top_entities_summary = ", ".join(
         f"{e.text} ({e.label})" for e in nlp_result.entities[:10]
     ) or "None detected"
@@ -100,8 +131,15 @@ def build_meeting_analysis_prompt(
         ],
     }
 
+    chunk_header = (
+        f"TRANSCRIPT CHUNK: {chunk_index} of {total_chunks}\n"
+        if total_chunks > 1
+        else ""
+    )
+
     user_prompt = (
-        f"MEETING TITLE: {meeting_title}\n\n"
+        f"MEETING TITLE: {meeting_title}\n"
+        f"{chunk_header}\n"
         f"LINGUISTIC CUES (Detected Entities): {top_entities_summary}\n"
         f"LINGUISTIC CUES (Salient Keywords): {top_keywords_summary}\n\n"
         "TRANSCRIPT SEGMENTS:\n"
@@ -110,4 +148,23 @@ def build_meeting_analysis_prompt(
         f"Return ONLY valid JSON matching this structure exactly:\n{json.dumps(json_schema_format, indent=2)}"
     )
 
+    return system_prompt, user_prompt
+
+
+def build_summary_synthesis_prompt(
+    meeting_title: str,
+    chunk_summaries: list[str],
+) -> tuple[str, str]:
+    """Synthesize a unified meeting summary from multiple chunk summaries."""
+    system_prompt = (
+        "You are an expert meeting intelligence assistant. Combine the provided partial "
+        "chunk summaries from a single meeting into one concise 2 to 4 sentence executive "
+        "summary without inventing any facts. Return ONLY valid JSON: {\"summary\": \"...\"}."
+    )
+    numbered = "\n".join(f"Part {idx}: {text}" for idx, text in enumerate(chunk_summaries, start=1))
+    user_prompt = (
+        f"MEETING TITLE: {meeting_title}\n\n"
+        f"PARTIAL SUMMARIES:\n{numbered}\n\n"
+        'Return ONLY valid JSON: {"summary": "..."}'
+    )
     return system_prompt, user_prompt
